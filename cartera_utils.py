@@ -52,17 +52,15 @@ def cargar_movimientos_cash(path=EXCEL_PATH):
 def calcular_capital_acumulado(cash, indice, columna_importe="Importe_firmado"):
     """
     Calcula el capital neto aportado a la cartera usando solo la hoja Cash.
-    Si una aportación cae en fin de semana/festivo, se asigna al siguiente día con precio disponible.
     """
     if columna_importe not in cash.columns:
         raise ValueError(f"No existe la columna '{columna_importe}' en la hoja Cash.")
 
-    flujos = pd.Series(0.0, index=indice.index)
-
-    for fecha, importe in cash.groupby("Fecha")[columna_importe].sum().items():
-        fechas_validas = flujos.index[flujos.index >= fecha]
-        if len(fechas_validas) > 0:
-            flujos.loc[fechas_validas[0]] += importe
+    flujos = (
+        cash.groupby("Fecha")[columna_importe]
+        .sum()
+        .reindex(indice.index, fill_value=0)
+    )
 
     capital_acumulado = flujos.cumsum()
 
@@ -82,35 +80,13 @@ def calcular_posiciones_actuales(df):
     return posiciones
 
 
-def calcular_rentabilidad_diaria_ajustada(valor_cartera, flujos):
-    """
-    Calcula rentabilidades diarias ajustadas por aportaciones y retiradas externas.
-    Esta es la base de la TWR, la volatilidad y el Sharpe.
-    """
-    flujos = flujos.reindex(valor_cartera.index, fill_value=0)
-    rent_diaria = (valor_cartera - valor_cartera.shift(1) - flujos) / valor_cartera.shift(1)
-    rent_diaria = rent_diaria.replace([float("inf"), -float("inf")], pd.NA).fillna(0)
-
-    return rent_diaria
-
-
-def calcular_rentabilidad_twr(valor_cartera, flujos):
-    """
-    Calcula la rentabilidad TWR de la cartera.
-    No se ve distorsionada por nuevas aportaciones o retiradas de dinero.
-    """
-    rent_diaria = calcular_rentabilidad_diaria_ajustada(valor_cartera, flujos)
-    rentabilidad_twr = (1 + rent_diaria).cumprod() - 1
-
-    return rentabilidad_twr
-
-
 def calcular_vol_sharpe(valor_cartera, flujos, ventana=252, rf_anual=0):
     """
     Calcula volatilidad anualizada y Sharpe usando rentabilidades diarias
     ajustadas por aportaciones/retiros.
     """
-    rent_diaria = calcular_rentabilidad_diaria_ajustada(valor_cartera, flujos).dropna()
+    rent_diaria = (valor_cartera - valor_cartera.shift(1) - flujos) / valor_cartera.shift(1)
+    rent_diaria = rent_diaria.replace([float("inf"), -float("inf")], pd.NA).dropna()
 
     if ventana is not None:
         rent_diaria = rent_diaria.tail(ventana)
@@ -208,27 +184,21 @@ def calcular_historico_cartera(df, cash):
     return cartera
 
 
-def calcular_rentabilidad_sobre_capital_aportado(df, cash):
-    """
-    Calcula la rentabilidad simple sobre capital neto aportado.
-    Ojo: esta métrica puede bajar artificialmente cuando se mete dinero nuevo.
-    """
-    cartera = calcular_historico_cartera(df, cash)
-    _, capital_acumulado = calcular_capital_acumulado(cash, cartera)
-    rentabilidad = (cartera - capital_acumulado) / capital_acumulado
-    rentabilidad = rentabilidad.replace([float("inf"), -float("inf")], 0).fillna(0)
-
-    return rentabilidad
-
-
 def calcular_desempeno_cartera(df, cash):
     """
-    Calcula la rentabilidad TWR de la cartera, ajustada por aportaciones y retiradas.
+    Calcula la rentabilidad de la cartera sobre el capital neto aportado.
+    Rentabilidad = (valor cartera - capital aportado) / capital aportado
     """
     cartera = calcular_historico_cartera(df, cash)
-    flujos, _ = calcular_capital_acumulado(cash, cartera)
 
-    return calcular_rentabilidad_twr(cartera, flujos)
+    _, capital_acumulado = calcular_capital_acumulado(cash, cartera)
+
+    rentabilidad = (cartera - capital_acumulado) / capital_acumulado
+
+    rentabilidad = rentabilidad.replace([float("inf"), -float("inf")], 0)
+    rentabilidad = rentabilidad.fillna(0)
+
+    return rentabilidad
 
 
 def calcular_desglose_fx_eur(df, cash):
@@ -275,14 +245,10 @@ def calcular_desglose_fx_eur(df, cash):
     desglose["Rentabilidad_activos_EUR"] = efecto_activos_eur / capital_eur
     desglose["Rentabilidad_FX_EUR"] = efecto_fx_eur / capital_eur
 
-    flujos_eur = capital_eur.diff().fillna(capital_eur)
-    desglose["Rentabilidad_TWR_EUR"] = calcular_rentabilidad_twr(valor_cartera_eur, flujos_eur)
-
     columnas_rentabilidad = [
         "Rentabilidad_total_EUR",
         "Rentabilidad_activos_EUR",
-        "Rentabilidad_FX_EUR",
-        "Rentabilidad_TWR_EUR"
+        "Rentabilidad_FX_EUR"
     ]
 
     desglose[columnas_rentabilidad] = (

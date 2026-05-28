@@ -97,7 +97,33 @@ def crear_grafico_drawdown_base(rentabilidad, capital_acumulado, simbolo, titulo
     return fig
 
 
-def crear_tarjeta(titulo, valor, id_titulo=None, id_valor=None):
+def titulo_tarjeta(titulo, tooltip=None):
+    hijos = [html.Span(titulo)]
+    if tooltip:
+        hijos.append(
+            html.Span(
+                "?",
+                title=tooltip,
+                style={
+                    "display": "inline-flex",
+                    "alignItems": "center",
+                    "justifyContent": "center",
+                    "width": "17px",
+                    "height": "17px",
+                    "borderRadius": "50%",
+                    "border": "1px solid #9ca3af",
+                    "color": "#6b7280",
+                    "fontSize": "11px",
+                    "fontWeight": "700",
+                    "cursor": "help",
+                    "marginLeft": "6px"
+                }
+            )
+        )
+    return hijos
+
+
+def crear_tarjeta(titulo, valor, id_titulo=None, id_valor=None, tooltip=None):
     return html.Div(
         style={
             "backgroundColor": "white",
@@ -107,9 +133,11 @@ def crear_tarjeta(titulo, valor, id_titulo=None, id_valor=None):
         },
         children=[
             html.Div(
-                titulo,
+                titulo_tarjeta(titulo, tooltip),
                 id=id_titulo,
                 style={
+                    "display": "flex",
+                    "alignItems": "center",
                     "fontSize": "15px",
                     "color": "#6b7280",
                     "marginBottom": "10px"
@@ -147,11 +175,11 @@ def crear_grafico_cartera(rentabilidad, flujos, capital_acumulado):
             x=rentabilidad.index,
             y=rentabilidad.values * 100,
             mode="lines",
-            name="Rentabilidad TWR",
+            name="Rentabilidad cartera",
             line=dict(width=3),
             hovertemplate=(
                 "Fecha: %{x}<br>"
-                "Rentabilidad TWR: %{y:.2f}%"
+                "Rentabilidad: %{y:.2f}%"
                 "<extra></extra>"
             )
         ),
@@ -179,10 +207,10 @@ def crear_grafico_cartera(rentabilidad, flujos, capital_acumulado):
         col=1
     )
 
-    aplicar_layout_base(fig, "Rentabilidad TWR de la cartera y capital invertido")
+    aplicar_layout_base(fig, "Rentabilidad de la cartera y capital invertido")
 
     fig.update_yaxes(
-        title_text="Rentabilidad TWR",
+        title_text="Rentabilidad sobre capital invertido",
         ticksuffix="%",
         row=1,
         col=1
@@ -210,7 +238,7 @@ def crear_grafico_drawdown(rentabilidad, flujos, capital_acumulado):
         rentabilidad,
         capital_acumulado,
         "$",
-        "Drawdown de la rentabilidad TWR y capital invertido",
+        "Drawdown de la cartera y capital invertido",
         "Drawdown",
         "Capital invertido",
         "Capital invertido USD"
@@ -220,20 +248,71 @@ def crear_grafico_drawdown(rentabilidad, flujos, capital_acumulado):
 def crear_grafico_desglose_eur(desglose_fx):
     if desglose_fx.empty:
         fig = go.Figure()
-        fig.update_layout(title="No hay datos suficientes para calcular la rentabilidad EUR", template="plotly_white", height=600)
+        fig.update_layout(
+            title="No hay datos suficientes para calcular el desglose EUR/FX",
+            template="plotly_white",
+            height=600
+        )
         return fig
 
-    columna_rentabilidad = "Rentabilidad_TWR_EUR" if "Rentabilidad_TWR_EUR" in desglose_fx.columns else "Rentabilidad_total_EUR"
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.06, specs=[[{"type": "scatter"}], [{"type": "scatter"}]])
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=[0.75, 0.25],
+        vertical_spacing=0.06,
+        specs=[
+            [{"type": "scatter"}],
+            [{"type": "scatter"}]
+        ]
+    )
 
     fig.add_trace(
         go.Scatter(
             x=desglose_fx.index,
-            y=desglose_fx[columna_rentabilidad] * 100,
+            y=desglose_fx["Rentabilidad_total_EUR"] * 100,
             mode="lines",
-            name="Rentabilidad TWR EUR",
+            name="Rentabilidad total EUR",
             line=dict(width=3),
-            hovertemplate="Fecha: %{x}<br>Rentabilidad TWR EUR: %{y:.2f}%<extra></extra>"
+            hovertemplate=(
+                "Fecha: %{x}<br>"
+                "Rentabilidad total EUR: %{y:.2f}%"
+                "<extra></extra>"
+            )
+        ),
+        row=1,
+        col=1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=desglose_fx.index,
+            y=desglose_fx["Rentabilidad_activos_EUR"] * 100,
+            mode="lines",
+            name="Efecto activos",
+            line=dict(width=2),
+            hovertemplate=(
+                "Fecha: %{x}<br>"
+                "Efecto activos: %{y:.2f}%"
+                "<extra></extra>"
+            )
+        ),
+        row=1,
+        col=1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=desglose_fx.index,
+            y=desglose_fx["Rentabilidad_FX_EUR"] * 100,
+            mode="lines",
+            name="Efecto FX",
+            line=dict(width=2),
+            hovertemplate=(
+                "Fecha: %{x}<br>"
+                "Efecto FX: %{y:.2f}%"
+                "<extra></extra>"
+            )
         ),
         row=1,
         col=1
@@ -248,18 +327,41 @@ def crear_grafico_desglose_eur(desglose_fx):
             line=dict(width=2, shape="hv", color="green"),
             fill="tozeroy",
             fillcolor="rgba(0, 128, 0, 0.12)",
-            hovertemplate="Fecha: %{x}<br>Capital invertido: €%{y:,.2f}<extra></extra>"
+            hovertemplate=(
+                "Fecha: %{x}<br>"
+                "Capital invertido: €%{y:,.2f}"
+                "<extra></extra>"
+            )
         ),
         row=2,
         col=1
     )
 
-    aplicar_layout_base(fig, "Rentabilidad TWR EUR y capital invertido")
-    fig.update_yaxes(title_text="Rentabilidad TWR", ticksuffix="%", row=1, col=1)
-    fig.update_yaxes(title_text="Capital invertido EUR", tickprefix="€", separatethousands=True, row=2, col=1)
-    fig.update_xaxes(title_text="Fecha", row=2, col=1)
+    aplicar_layout_base(fig, "Rentabilidad EUR: total, efecto activos y efecto FX")
+
+    fig.update_yaxes(
+        title_text="Rentabilidad sobre capital invertido",
+        ticksuffix="%",
+        row=1,
+        col=1
+    )
+
+    fig.update_yaxes(
+        title_text="Capital invertido EUR",
+        tickprefix="€",
+        separatethousands=True,
+        row=2,
+        col=1
+    )
+
+    fig.update_xaxes(
+        title_text="Fecha",
+        row=2,
+        col=1
+    )
 
     return fig
+
 
 def crear_grafico_drawdown_eur(desglose_fx):
     if desglose_fx.empty:
@@ -268,10 +370,10 @@ def crear_grafico_drawdown_eur(desglose_fx):
         return fig
 
     return crear_grafico_drawdown_base(
-        desglose_fx["Rentabilidad_TWR_EUR"] if "Rentabilidad_TWR_EUR" in desglose_fx.columns else desglose_fx["Rentabilidad_total_EUR"],
+        desglose_fx["Rentabilidad_total_EUR"],
         desglose_fx["Capital_EUR"],
         "€",
-        "Drawdown TWR EUR y capital invertido",
+        "Drawdown EUR y capital invertido",
         "Drawdown EUR",
         "Capital invertido EUR",
         "Capital invertido EUR"
