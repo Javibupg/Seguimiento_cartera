@@ -18,10 +18,44 @@ def titulo_tarjeta(titulo, tooltip=None):
 
 
 def crear_tarjeta(titulo, valor, id_titulo=None, id_valor=None, tooltip=None):
-    return html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)"}, children=[
-        html.Div(titulo_tarjeta(titulo, tooltip), id=id_titulo, style={"display": "flex", "alignItems": "center", "fontSize": "15px", "color": "#6b7280", "marginBottom": "10px"}),
-        html.Div(valor, id=id_valor, style={"fontSize": "30px", "fontWeight": "700", "color": "#111827"})
-    ])
+    props_titulo = {
+        "children": titulo_tarjeta(titulo, tooltip),
+        "style": {
+            "display": "flex",
+            "alignItems": "center",
+            "fontSize": "15px",
+            "color": "#6b7280",
+            "marginBottom": "10px",
+        },
+    }
+
+    if id_titulo is not None:
+        props_titulo["id"] = id_titulo
+
+    props_valor = {
+        "children": valor,
+        "style": {
+            "fontSize": "30px",
+            "fontWeight": "700",
+            "color": "#111827",
+        },
+    }
+
+    if id_valor is not None:
+        props_valor["id"] = id_valor
+
+    return html.Div(
+        style={
+            "backgroundColor": "white",
+            "padding": "24px",
+            "borderRadius": "18px",
+            "boxShadow": "0 4px 14px rgba(0,0,0,0.08)",
+        },
+        children=[
+            html.Div(**props_titulo),
+            html.Div(**props_valor),
+        ],
+    )
 
 
 def aplicar_layout_base(fig, titulo):
