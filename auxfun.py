@@ -123,9 +123,9 @@ def crear_tabla_operaciones_cerradas(df):
     if df.empty:
         return html.Div("Todavía no hay operaciones cerradas.", style={"color": "#6b7280", "padding": "20px"})
     tabla = df.copy()
-    tabla["Capital_invertido"] = tabla["Capital_invertido"].map(lambda x: f"${x:,.2f}")
+    tabla["Capital_invertido"] = tabla["Capital_invertido"].map(lambda x: f"€{x:,.2f}")
     for col in ["Rentabilidad", "Rent. anualizada"]:
         tabla[col] = tabla[col].map(lambda x: f"{x * 100:.2f}%")
-    tabla = tabla.rename(columns={"Capital_invertido": "Capital invertido"})
-    columnas = ["Activo", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital invertido"]
+    tabla = tabla.rename(columns={"Capital_invertido": "Capital invertido EUR"})
+    columnas = ["Activo", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital invertido EUR"]
     return dash_table.DataTable(data=tabla[columnas].to_dict("records"), columns=[{"name": c, "id": c} for c in columnas], page_action="none", fixed_rows={"headers": True}, style_table={"height": "300px", "overflowY": "auto", "overflowX": "auto"}, style_cell={"fontFamily": "Arial, sans-serif", "fontSize": "14px", "padding": "10px", "textAlign": "center", "minWidth": "120px", "whiteSpace": "normal"}, style_header={"backgroundColor": "#f3f4f6", "fontWeight": "700", "color": "#111827"}, style_data={"backgroundColor": "white", "color": "#111827"})

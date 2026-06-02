@@ -17,14 +17,31 @@ PERIODOS = {
 
 ESTILO_BOTON = {"display": "inline-block", "padding": "10px 18px", "marginRight": "10px", "border": "1px solid #d1d5db", "borderRadius": "10px", "cursor": "pointer", "backgroundColor": "#f9fafb", "fontWeight": "600"}
 
-# Cálculos comunes de toda la app.
+# Cálculos comunes de toda la app. La divisa base interna es EUR.
 operaciones = cargar_operaciones()
 cash = cargar_movimientos_cash()
-cartera_usd = calcular_historico_cartera(operaciones, cash)
-flujos_usd, capital_usd = calcular_capital_acumulado(cash, cartera_usd, "Importe_firmado")
-twr_usd = calcular_twr(cartera_usd, flujos_usd)
-desglose_fx = calcular_desglose_fx_eur(operaciones, cash)
-operaciones_cerradas = calcular_operaciones_cerradas(operaciones)
+series_cartera = calcular_series_cartera_multidivisa(operaciones, cash)
+
+# La tabla de operaciones cerradas es informativa. No debe bloquear el arranque
+# de la app si falta algún tipo de cambio histórico o si Yahoo no responde.
+try:
+    operaciones_cerradas = calcular_operaciones_cerradas(operaciones)
+except Exception as e:
+    print(f"Aviso: no se pudieron calcular las operaciones cerradas: {e}")
+    operaciones_cerradas = pd.DataFrame()
+
+# Alias para no romper imports antiguos.
+cartera_eur = series_cartera.get("Valor_cartera_EUR", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
+flujos_eur = series_cartera.get("Flujos_EUR", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
+capital_eur = series_cartera.get("Capital_EUR", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
+twr_eur = series_cartera.get("TWR_EUR", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
+
+cartera_usd = series_cartera.get("Valor_cartera_USD", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
+flujos_usd = series_cartera.get("Flujos_USD", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
+capital_usd = series_cartera.get("Capital_USD", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
+twr_usd = series_cartera.get("TWR_USD", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
+
+desglose_fx = series_cartera
 
 
 def tooltip_sharpe():
@@ -44,25 +61,37 @@ def rebasear_twr(s):
     return s * 0 if s.empty else (1 + s) / (1 + s.iloc[0]) - 1
 
 
-def preparar_datos_usd(periodo):
-    datos = pd.DataFrame({"valor": cartera_usd, "capital": capital_usd, "flujos": flujos_usd, "twr": twr_usd}).dropna()
+def preparar_datos_divisa(periodo, divisa="eur"):
+    divisa = divisa.lower()
+
+    if series_cartera.empty:
+        return pd.DataFrame(columns=["valor", "capital", "flujos", "twr"])
+
+    sufijo = divisa.upper()
+    datos = pd.DataFrame({
+        "valor": series_cartera[f"Valor_cartera_{sufijo}"],
+        "capital": series_cartera[f"Capital_{sufijo}"],
+        "flujos": series_cartera[f"Flujos_{sufijo}"],
+        "twr": series_cartera[f"TWR_{sufijo}"],
+    }).dropna()
+
     datos = filtrar_periodo(datos, periodo)
     datos["twr"] = rebasear_twr(datos["twr"])
     return datos
 
 
 def preparar_datos_eur(periodo):
-    if desglose_fx.empty:
-        return desglose_fx.copy()
-    datos = filtrar_periodo(desglose_fx, periodo)
-    for col in ["TWR_total_EUR", "TWR_activos_USD", "TWR_FX_EUR"]:
-        datos[col] = rebasear_twr(datos[col])
-    return datos
+    return preparar_datos_divisa(periodo, "eur")
+
+
+def preparar_datos_usd(periodo):
+    return preparar_datos_divisa(periodo, "usd")
 
 
 def calcular_metricas_periodo(valor, capital, flujos, twr, periodo):
     if valor.empty:
         return 0, 0, 0, 0, 0, 0
+
     primera = capital.iloc[-1] if periodo == "max" else valor.iloc[0]
     resultado = valor.iloc[-1] - capital.iloc[-1] if periodo == "max" else valor.iloc[-1] - valor.iloc[0] - flujos.iloc[1:].sum()
     vol, sharpe = calcular_vol_sharpe(valor, flujos, ventana=None, rf_anual=RF_ANUAL)
@@ -82,39 +111,9 @@ def titulo_resultado(divisa, periodo):
     return titulo_tarjeta(texto, TOOLTIP_TWR)
 
 
+def simbolo_divisa(divisa):
+    return "€" if divisa.lower() == "eur" else "$"
+
+
 def calcular_distribucion_actual():
-    posiciones = calcular_posiciones_actuales(operaciones)
-
-    if posiciones.empty or cartera_usd.empty:
-        return pd.DataFrame(), 0.0, 0.0, 0.0
-
-    tickers = posiciones.index.tolist()
-
-    precios = descargar_precios(tickers, operaciones["Fecha"].min())
-    ultimos_precios = precios.ffill().iloc[-1].reindex(tickers)
-
-    distribucion = pd.DataFrame({
-        "Activo": tickers,
-        "Acciones": posiciones.reindex(tickers).values,
-        "Precio_actual": ultimos_precios.values,
-    })
-
-    distribucion["Valor_USD"] = distribucion["Acciones"] * distribucion["Precio_actual"]
-
-    valor_acciones = float(distribucion["Valor_USD"].sum())
-    valor_total = valor_acciones
-    cash_actual = 0.0
-
-    distribucion["Peso"] = (
-        distribucion["Valor_USD"] / valor_acciones
-        if valor_acciones != 0
-        else 0
-    )
-
-    distribucion = (
-        distribucion
-        .sort_values("Valor_USD", ascending=False)
-        .reset_index(drop=True)
-    )
-
-    return distribucion, valor_acciones, cash_actual, valor_total
+    return calcular_distribucion_actual_multidivisa(operaciones, cash)
