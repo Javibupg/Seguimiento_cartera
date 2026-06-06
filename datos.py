@@ -117,3 +117,15 @@ def simbolo_divisa(divisa):
 
 def calcular_distribucion_actual():
     return calcular_distribucion_actual_multidivisa(operaciones, cash)
+
+def calcular_historico_posicion(activo):
+    return calcular_historico_posicion_abierta(operaciones, cash, activo)
+
+def obtener_opciones_posiciones_abiertas():
+    posiciones = calcular_posiciones_actuales(operaciones)
+    nombres = cargar_listado_activos()
+    if posiciones.empty:
+        return []
+    tickers = sorted(posiciones.index.tolist(), key=lambda t: nombres.get(t, t))
+    return [{"label": f"{nombres.get(t, t)} ({t})", "value": t} for t in tickers]
+

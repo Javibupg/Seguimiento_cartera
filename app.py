@@ -64,7 +64,7 @@ app.layout = html.Div(
                     style={"color": "#111827", "marginBottom": "5px"},
                 ),
                 html.P(
-                    "Seguimiento de cartera con rentabilidad TWR, divisas y distribución de posiciones",
+                    "Seguimiento de cartera con rentabilidad TWR, divisas y posiciones abiertas",
                     style={"color": "#6b7280", "marginBottom": "30px"},
                 ),
 
