@@ -129,3 +129,81 @@ def crear_tabla_operaciones_cerradas(df):
     tabla = tabla.rename(columns={"Capital_invertido": "Capital invertido EUR"})
     columnas = ["Activo", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital invertido EUR"]
     return dash_table.DataTable(data=tabla[columnas].to_dict("records"), columns=[{"name": c, "id": c} for c in columnas], page_action="none", fixed_rows={"headers": True}, style_table={"height": "300px", "overflowY": "auto", "overflowX": "auto"}, style_cell={"fontFamily": "Arial, sans-serif", "fontSize": "14px", "padding": "10px", "textAlign": "center", "minWidth": "120px", "whiteSpace": "normal"}, style_header={"backgroundColor": "#f3f4f6", "fontWeight": "700", "color": "#111827"}, style_data={"backgroundColor": "white", "color": "#111827"})
+
+
+
+def crear_tabla_inversiones_por_banco(df):
+    if df.empty:
+        return html.Div(
+            "No hay datos suficientes para mostrar el resumen por banco.",
+            style={"color": "#6b7280", "padding": "20px"},
+        )
+
+    tabla = df.copy()
+    columnas_importe = [
+        "Capital_invertido_EUR",
+        "Capital_sujeto_riesgo_EUR",
+        "Resultado_EUR",
+    ]
+
+    for col in columnas_importe:
+        tabla[col] = tabla[col].map(lambda x: f"€{x:,.2f}")
+
+    tabla["Rentabilidad"] = tabla["Rentabilidad"].map(lambda x: f"{x * 100:.2f}%")
+
+    tabla = tabla.rename(
+        columns={
+            "Banco": "Banco",
+            "Capital_invertido_EUR": "Dinero invertido EUR",
+            "Capital_sujeto_riesgo_EUR": "Capital sujeto a riesgo EUR",
+            "Resultado_EUR": "Subida / bajada EUR",
+            "Rentabilidad": "Subida / bajada %",
+        }
+    )
+
+    columnas = [
+        "Banco",
+        "Dinero invertido EUR",
+        "Capital sujeto a riesgo EUR",
+        "Subida / bajada EUR",
+        "Subida / bajada %",
+    ]
+
+    return dash_table.DataTable(
+        data=tabla[columnas].to_dict("records"),
+        columns=[{"name": c, "id": c} for c in columnas],
+        page_action="none",
+        fixed_rows={"headers": True},
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "fontFamily": "Arial, sans-serif",
+            "fontSize": "14px",
+            "padding": "10px",
+            "textAlign": "center",
+            "minWidth": "140px",
+            "whiteSpace": "normal",
+        },
+        style_header={
+            "backgroundColor": "#f3f4f6",
+            "fontWeight": "700",
+            "color": "#111827",
+        },
+        style_data={"backgroundColor": "white", "color": "#111827"},
+        style_data_conditional=[
+            {
+                "if": {"filter_query": "{Banco} = TOTAL"},
+                "fontWeight": "700",
+                "backgroundColor": "#f9fafb",
+            },
+            {
+                "if": {"column_id": "Subida / bajada EUR", "filter_query": "{Subida / bajada EUR} contains '-'"},
+                "color": ROJO,
+                "fontWeight": "700",
+            },
+            {
+                "if": {"column_id": "Subida / bajada %", "filter_query": "{Subida / bajada %} contains '-'"},
+                "color": ROJO,
+                "fontWeight": "700",
+            },
+        ],
+    )

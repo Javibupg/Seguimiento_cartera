@@ -1,8 +1,8 @@
 import dash
 from dash import html, dcc, Input, Output, callback
 
-from auxfun import crear_tarjeta, crear_tabla_operaciones_cerradas, crear_grafico_twr, crear_grafico_drawdown, formatear_resultado_con_rentabilidad
-from datos import PERIODOS, ESTILO_BOTON, TOOLTIP_TWR, tooltip_sharpe, preparar_datos_divisa, calcular_metricas_periodo, formatear_importe, titulo_primera_tarjeta, titulo_resultado, simbolo_divisa, operaciones_cerradas
+from auxfun import crear_tarjeta, crear_tabla_operaciones_cerradas, crear_tabla_inversiones_por_banco, crear_grafico_twr, crear_grafico_drawdown, formatear_resultado_con_rentabilidad
+from datos import *
 
 
 dash.register_page(
@@ -37,6 +37,14 @@ layout = html.Div(children=[
     html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)", "marginTop": "30px"}, children=[
         html.H3("Operaciones cerradas", style={"color": "#111827", "marginBottom": "20px"}),
         crear_tabla_operaciones_cerradas(operaciones_cerradas)
+    ]),
+    html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)", "marginTop": "30px"}, children=[
+        html.H3("Inversiones por banco", style={"color": "#111827", "marginBottom": "8px"}),
+        html.P(
+            "Resumen en EUR por banco: dinero invertido histórico, capital actualmente sujeto a riesgo y resultado total acumulado.",
+            style={"color": "#6b7280", "marginBottom": "20px"},
+        ),
+        crear_tabla_inversiones_por_banco(inversiones_por_banco)
     ])
 ])
 
@@ -68,9 +76,14 @@ def actualizar_dashboard(divisa, tipo_grafico, periodo):
 
     return (
         fig,
-        titulo_primera_tarjeta(divisa_txt, periodo), formatear_importe(primera, simbolo),
-        f"Valor actual {divisa_txt}", formatear_importe(valor_final, simbolo),
-        titulo_resultado(divisa_txt, periodo), formatear_resultado_con_rentabilidad(resultado, twr, simbolo),
-        f"Volatilidad anualizada {divisa_txt}", f"{vol * 100:.2f}%",
-        f"Sharpe {divisa_txt}", f"{sharpe:.2f}",
+        titulo_primera_tarjeta(divisa_txt, periodo),
+        formatear_importe(primera, simbolo),
+        f"Valor actual {divisa_txt}",
+        formatear_importe(valor_final, simbolo),
+        titulo_resultado(divisa_txt, periodo),
+        formatear_resultado_con_rentabilidad(resultado, twr, simbolo),
+        f"Volatilidad anualizada {divisa_txt}",
+        f"{vol * 100:.2f}%",
+        titulo_sharpe(divisa_txt),
+        f"{sharpe:.2f}",
     )

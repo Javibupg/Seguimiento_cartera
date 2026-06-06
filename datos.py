@@ -30,6 +30,12 @@ except Exception as e:
     print(f"Aviso: no se pudieron calcular las operaciones cerradas: {e}")
     operaciones_cerradas = pd.DataFrame()
 
+try:
+    inversiones_por_banco = calcular_inversiones_por_banco(operaciones, cash)
+except Exception as e:
+    print(f"Aviso: no se pudo calcular el resumen por banco: {e}")
+    inversiones_por_banco = pd.DataFrame()
+
 # Alias para no romper imports antiguos.
 cartera_eur = series_cartera.get("Valor_cartera_EUR", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
 flujos_eur = series_cartera.get("Flujos_EUR", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
@@ -45,8 +51,10 @@ desglose_fx = series_cartera
 
 
 def tooltip_sharpe():
-    fecha = f" Última observación BCE: {RF_FECHA}." if RF_FECHA else " Si no hay conexión, se usa fallback 2,00%."
-    return f"Sharpe anualizado calculado con rentabilidades diarias ajustadas por flujos y tipo libre de riesgo EUR BCE: {RF_ANUAL * 100:.2f}%." + fecha
+    if RF_FECHA:
+        return f"Tipo libre de riesgo considerado: {RF_ANUAL * 100:.2f}% anual ({RF_FECHA})."
+    else:
+        return f" No se pudo descargar el dato del BCE; se usa fallback del 2,00%."
 
 
 def filtrar_periodo(datos, periodo):
@@ -111,21 +119,13 @@ def titulo_resultado(divisa, periodo):
     return titulo_tarjeta(texto, TOOLTIP_TWR)
 
 
+def titulo_sharpe(divisa):
+    return titulo_tarjeta(f"Sharpe {divisa}", tooltip_sharpe())
+
+
 def simbolo_divisa(divisa):
     return "€" if divisa.lower() == "eur" else "$"
 
 
 def calcular_distribucion_actual():
     return calcular_distribucion_actual_multidivisa(operaciones, cash)
-
-def calcular_historico_posicion(activo):
-    return calcular_historico_posicion_abierta(operaciones, cash, activo)
-
-def obtener_opciones_posiciones_abiertas():
-    posiciones = calcular_posiciones_actuales(operaciones)
-    nombres = cargar_listado_activos()
-    if posiciones.empty:
-        return []
-    tickers = sorted(posiciones.index.tolist(), key=lambda t: nombres.get(t, t))
-    return [{"label": f"{nombres.get(t, t)} ({t})", "value": t} for t in tickers]
-
