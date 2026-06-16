@@ -1,11 +1,13 @@
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yfinance as yf
 
 EXCEL_PATH = Path("Libro_inversiones.xlsx")
 MONEDAS_SOPORTADAS = {"EUR", "USD"}
 SUFIJOS_EUR = (".MI", ".PA", ".MC", ".DE", ".AS", ".BR", ".VI", ".F", ".MU", ".BE", ".HM", ".DU")
+FX_FALLBACK_USDEUR = 0.92
 
 
 def _limpiar_texto(s):
@@ -151,6 +153,36 @@ def _preparar_tipo_cambio_eur(df):
     return df
 
 
+def _fx_fallback_desde_excel(path=EXCEL_PATH, fallback=FX_FALLBACK_USDEUR):
+    """Usa el último tipo USD->EUR del Excel si Yahoo no devuelve USDEUR=X."""
+    valores = []
+
+    for hoja in ["Operaciones", "Cash"]:
+        try:
+            tabla = pd.read_excel(path, sheet_name=hoja)
+        except Exception:
+            continue
+
+        tabla.columns = tabla.columns.str.strip()
+
+        if "Tipo_cambio_EUR" not in tabla.columns:
+            continue
+
+        if "Currency" not in tabla.columns and "Divisa" in tabla.columns:
+            tabla["Currency"] = tabla["Divisa"]
+
+        tipos = pd.to_numeric(tabla["Tipo_cambio_EUR"], errors="coerce")
+
+        if "Currency" in tabla.columns:
+            es_usd = tabla["Currency"].fillna("").astype(str).str.upper().str.strip().eq("USD")
+            tipos = tipos[es_usd]
+
+        tipos = tipos[(tipos > 0) & tipos.notna()]
+        valores.extend(tipos.tolist())
+
+    return float(valores[-1]) if valores else float(fallback)
+
+
 def _normalizar_banco(df):
     """Garantiza una columna Banco limpia, aunque en Excel venga como banco/BANCO."""
     df = df.copy()
@@ -228,6 +260,25 @@ def cargar_movimientos_cash(path=EXCEL_PATH):
     return cash.sort_values("Fecha").reset_index(drop=True)
 
 
+def cargar_listado_activos(path=EXCEL_PATH):
+    """Devuelve Ticker -> Nombre desde la hoja Listado de activos."""
+    try:
+        listado = pd.read_excel(path, sheet_name="Listado de activos")
+    except Exception:
+        return {}
+
+    listado.columns = listado.columns.str.strip()
+
+    if "Ticker" not in listado.columns or "Nombre" not in listado.columns:
+        return {}
+
+    listado = listado.dropna(subset=["Ticker"]).copy()
+    listado["Ticker"] = listado["Ticker"].astype(str).str.strip()
+    listado["Nombre"] = listado["Nombre"].fillna(listado["Ticker"]).astype(str).str.strip()
+    listado = listado[listado["Ticker"].ne("")]
+    return dict(zip(listado["Ticker"], listado["Nombre"]))
+
+
 def _alinear_flujos(fechas, importes, indice):
     """Coloca cada flujo en la primera fecha disponible del índice >= a su fecha real."""
     idx = pd.DatetimeIndex(indice)
@@ -279,17 +330,40 @@ def descargar_precios(tickers, fecha_inicio):
 
 
 def descargar_fx_usdeur(fecha_inicio, indice=None):
-    fx = descargar_precios("USDEUR=X", fecha_inicio)
+    try:
+        fx = descargar_precios("USDEUR=X", fecha_inicio)
+    except Exception:
+        fx = pd.DataFrame()
 
     if fx.empty:
-        raise ValueError("No se pudo descargar el tipo de cambio USDEUR=X desde Yahoo Finance.")
+        valor_fallback = _fx_fallback_desde_excel()
+        idx = (
+            pd.DatetimeIndex(indice)
+            if indice is not None
+            else pd.bdate_range(pd.to_datetime(fecha_inicio).normalize(), pd.Timestamp.today().normalize())
+        )
+        serie = pd.Series(valor_fallback, index=idx, name="USDEUR=X", dtype="float64")
+        serie.attrs["usa_fallback"] = True
+        return serie
 
     col = "USDEUR=X" if "USDEUR=X" in fx.columns else fx.columns[0]
     fx = fx[col].dropna().astype(float)
 
+    if fx.empty:
+        valor_fallback = _fx_fallback_desde_excel()
+        idx = (
+            pd.DatetimeIndex(indice)
+            if indice is not None
+            else pd.bdate_range(pd.to_datetime(fecha_inicio).normalize(), pd.Timestamp.today().normalize())
+        )
+        serie = pd.Series(valor_fallback, index=idx, name="USDEUR=X", dtype="float64")
+        serie.attrs["usa_fallback"] = True
+        return serie
+
     if indice is not None:
         fx = fx.reindex(pd.DatetimeIndex(indice)).ffill().bfill()
 
+    fx.attrs["usa_fallback"] = False
     return fx
 
 
@@ -510,6 +584,271 @@ def calcular_distribucion_actual_multidivisa(df, cash):
 
     distribucion = distribucion.sort_values("Valor_EUR", ascending=False).reset_index(drop=True)
     return distribucion, valor_total_eur, valor_total_usd
+
+
+def calcular_optimizacion_montecarlo_sharpe(
+    df,
+    cash,
+    rf_anual=0.0,
+    n_simulaciones=8000,
+    anios_historico=1,
+    seed=42,
+):
+    posiciones = calcular_posiciones_actuales(df)
+
+    if posiciones.empty:
+        return {
+            "simulaciones": pd.DataFrame(),
+            "frontera": pd.DataFrame(),
+            "pesos": pd.DataFrame(),
+            "actual": {},
+            "optima": {},
+            "aviso": "No hay posiciones abiertas para optimizar.",
+        }
+
+    tickers = [ticker for ticker in posiciones.index.tolist() if str(ticker).lower() != "cash"]
+
+    if len(tickers) < 2:
+        return {
+            "simulaciones": pd.DataFrame(),
+            "frontera": pd.DataFrame(),
+            "pesos": pd.DataFrame(),
+            "actual": {},
+            "optima": {},
+            "aviso": "Se necesitan al menos dos activos abiertos para simular combinaciones de pesos.",
+        }
+
+    fecha_inicio = pd.Timestamp.today().normalize() - pd.DateOffset(years=anios_historico)
+    try:
+        precios = descargar_precios(tickers, fecha_inicio)
+    except Exception as e:
+        return {
+            "simulaciones": pd.DataFrame(),
+            "frontera": pd.DataFrame(),
+            "pesos": pd.DataFrame(),
+            "actual": {},
+            "optima": {},
+            "aviso": f"No se pudo descargar el histórico de precios: {e}",
+        }
+
+    if precios.empty:
+        return {
+            "simulaciones": pd.DataFrame(),
+            "frontera": pd.DataFrame(),
+            "pesos": pd.DataFrame(),
+            "actual": {},
+            "optima": {},
+            "aviso": "No se pudo descargar histórico suficiente para los activos abiertos.",
+        }
+
+    precios = precios.reindex(columns=tickers).ffill().dropna(how="all")
+    try:
+        fx_usdeur = descargar_fx_usdeur(fecha_inicio, precios.index)
+    except Exception as e:
+        return {
+            "simulaciones": pd.DataFrame(),
+            "frontera": pd.DataFrame(),
+            "pesos": pd.DataFrame(),
+            "actual": {},
+            "optima": {},
+            "aviso": f"No se pudo descargar el tipo de cambio EUR/USD: {e}",
+        }
+    aviso_fx = (
+        "Aviso: Yahoo no devolvió el histórico EUR/USD; para activos USD se usa el último tipo de cambio disponible del Excel."
+        if fx_usdeur.attrs.get("usa_fallback", False)
+        else None
+    )
+    divisas = df.groupby("Activo")["Currency"].last().reindex(tickers)
+
+    precios_eur = precios.copy()
+    for ticker, divisa in divisas.items():
+        if divisa == "USD":
+            precios_eur[ticker] = precios_eur[ticker] * fx_usdeur
+
+    rentabilidades = (
+        precios_eur.pct_change()
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna(axis=1, thresh=60)
+        .dropna()
+    )
+
+    tickers_validos = rentabilidades.columns.tolist()
+    if len(tickers_validos) < 2:
+        return {
+            "simulaciones": pd.DataFrame(),
+            "frontera": pd.DataFrame(),
+            "pesos": pd.DataFrame(),
+            "actual": {},
+            "optima": {},
+            "aviso": "No hay suficientes datos históricos comparables entre activos.",
+        }
+
+    media_anual = rentabilidades.mean() * 252
+    cov_anual = rentabilidades.cov() * 252
+
+    rng = np.random.default_rng(seed)
+    pesos = rng.dirichlet(np.ones(len(tickers_validos)), size=n_simulaciones)
+
+    rent_esperada = pesos @ media_anual.values
+    volatilidad = np.sqrt(np.einsum("ij,jk,ik->i", pesos, cov_anual.values, pesos))
+    sharpe = np.divide(
+        rent_esperada - rf_anual,
+        volatilidad,
+        out=np.zeros_like(rent_esperada),
+        where=volatilidad > 0,
+    )
+
+    simulaciones = pd.DataFrame(
+        {
+            "Volatilidad": volatilidad,
+            "Rentabilidad": rent_esperada,
+            "Sharpe": sharpe,
+        }
+    )
+
+    mascara_positiva = (simulaciones["Rentabilidad"] > 0) & (simulaciones["Volatilidad"] > 0)
+    simulaciones = simulaciones.loc[mascara_positiva].reset_index(drop=True)
+    pesos = pesos[mascara_positiva.values]
+
+    if simulaciones.empty:
+        return {
+            "simulaciones": pd.DataFrame(),
+            "frontera": pd.DataFrame(),
+            "pesos": pd.DataFrame(),
+            "actual": {},
+            "optima": {},
+            "misma_vola": {},
+            "aviso": "No se han encontrado carteras simuladas con rentabilidad esperada positiva.",
+        }
+
+    try:
+        distribucion, _, _ = calcular_distribucion_actual_multidivisa(df, cash)
+    except Exception as e:
+        return {
+            "simulaciones": pd.DataFrame(),
+            "frontera": pd.DataFrame(),
+            "pesos": pd.DataFrame(),
+            "actual": {},
+            "optima": {},
+            "aviso": f"No se pudo calcular la distribución actual para comparar pesos: {e}",
+        }
+    distribucion = distribucion[distribucion["Activo"].isin(tickers_validos)].copy()
+    total_actual = distribucion["Valor_EUR"].sum()
+    pesos_actuales = (
+        distribucion.set_index("Activo")["Valor_EUR"].reindex(tickers_validos).fillna(0.0) / total_actual
+        if total_actual
+        else pd.Series(1 / len(tickers_validos), index=tickers_validos)
+    )
+
+    rent_actual = float(pesos_actuales.values @ media_anual.reindex(tickers_validos).values)
+    vol_actual = float(np.sqrt(pesos_actuales.values @ cov_anual.reindex(index=tickers_validos, columns=tickers_validos).values @ pesos_actuales.values))
+    sharpe_actual = (rent_actual - rf_anual) / vol_actual if vol_actual > 0 else 0.0
+
+    pesos_actual_array = pesos_actuales.reindex(tickers_validos).values
+
+    def _indice_mas_parecido(indices):
+        if len(indices) == 0:
+            return None
+        distancias = np.abs(pesos[indices] - pesos_actual_array).sum(axis=1)
+        return int(indices[int(distancias.argmin())])
+
+    idx_optimo_sim = int(simulaciones["Sharpe"].idxmax())
+    optimo_sim = simulaciones.loc[idx_optimo_sim]
+    sharpe_objetivo = float(optimo_sim["Sharpe"])
+    umbral_sharpe = sharpe_objetivo - max(0.02, abs(sharpe_objetivo) * 0.02)
+    indices_entorno_sharpe = simulaciones.index[simulaciones["Sharpe"] >= umbral_sharpe].to_numpy()
+    idx_optimo_cercano = _indice_mas_parecido(indices_entorno_sharpe)
+    if idx_optimo_cercano is None:
+        idx_optimo_cercano = idx_optimo_sim
+    optimo_cercano = simulaciones.loc[idx_optimo_cercano]
+
+    if sharpe_actual >= umbral_sharpe:
+        pesos_optimos = pesos_actuales.reindex(tickers_validos)
+        optima = {
+            "Rentabilidad": rent_actual,
+            "Volatilidad": vol_actual,
+            "Sharpe": sharpe_actual,
+        }
+    else:
+        pesos_optimos = pd.Series(pesos[idx_optimo_cercano], index=tickers_validos)
+        optima = {
+            "Rentabilidad": float(optimo_cercano["Rentabilidad"]),
+            "Volatilidad": float(optimo_cercano["Volatilidad"]),
+            "Sharpe": float(optimo_cercano["Sharpe"]),
+        }
+
+    candidatas_misma_vola = simulaciones[simulaciones["Volatilidad"] <= vol_actual]
+    if candidatas_misma_vola.empty:
+        idx_misma_vola = int((simulaciones["Volatilidad"] - vol_actual).abs().idxmin())
+        entorno_misma_vola = simulaciones.index[[idx_misma_vola]].to_numpy()
+    else:
+        idx_misma_vola = int(candidatas_misma_vola["Rentabilidad"].idxmax())
+        rent_objetivo_misma_vola = float(simulaciones.loc[idx_misma_vola, "Rentabilidad"])
+        entorno_misma_vola = candidatas_misma_vola.index[
+            candidatas_misma_vola["Rentabilidad"] >= rent_objetivo_misma_vola * 0.98
+        ].to_numpy()
+
+    idx_misma_vola_cercano = _indice_mas_parecido(entorno_misma_vola)
+    if idx_misma_vola_cercano is None:
+        idx_misma_vola_cercano = idx_misma_vola
+    candidata_misma_vola = simulaciones.loc[idx_misma_vola_cercano]
+
+    if rent_actual >= float(simulaciones.loc[idx_misma_vola, "Rentabilidad"]) * 0.98:
+        pesos_misma_vola = pesos_actuales.reindex(tickers_validos)
+        misma_vola = {
+            "Rentabilidad": rent_actual,
+            "Volatilidad": vol_actual,
+            "Sharpe": sharpe_actual,
+        }
+    else:
+        pesos_misma_vola = pd.Series(pesos[idx_misma_vola_cercano], index=tickers_validos)
+        misma_vola = {
+            "Rentabilidad": float(candidata_misma_vola["Rentabilidad"]),
+            "Volatilidad": float(candidata_misma_vola["Volatilidad"]),
+            "Sharpe": float(candidata_misma_vola["Sharpe"]),
+        }
+
+
+    nombres_activos = cargar_listado_activos()
+    pesos_tabla = pd.DataFrame(
+        {
+            "Activo": tickers_validos,
+            "Nombre": [nombres_activos.get(ticker, ticker) for ticker in tickers_validos],
+            "Peso_actual": pesos_actuales.reindex(tickers_validos).values,
+            "Peso_optimo": pesos_optimos.reindex(tickers_validos).values,
+            "Peso_misma_vola": pesos_misma_vola.reindex(tickers_validos).values,
+        }
+    )
+    pesos_tabla["Cambio_pp"] = (pesos_tabla["Peso_optimo"] - pesos_tabla["Peso_actual"]) * 100
+    pesos_tabla["Cambio_misma_vola_pp"] = (pesos_tabla["Peso_misma_vola"] - pesos_tabla["Peso_actual"]) * 100
+    pesos_tabla = pesos_tabla.sort_values("Peso_optimo", ascending=False).reset_index(drop=True)
+
+    frontera = (
+        simulaciones.assign(
+            tramo_vol=pd.cut(simulaciones["Volatilidad"], bins=35, duplicates="drop")
+        )
+        .dropna(subset=["tramo_vol"])
+        .sort_values("Rentabilidad")
+        .groupby("tramo_vol", observed=False)
+        .tail(1)
+        .sort_values("Volatilidad")
+        .drop(columns="tramo_vol")
+        .reset_index(drop=True)
+    )
+
+    return {
+        "simulaciones": simulaciones,
+        "frontera": frontera,
+        "pesos": pesos_tabla,
+        "actual": {
+            "Rentabilidad": rent_actual,
+            "Volatilidad": vol_actual,
+            "Sharpe": sharpe_actual,
+        },
+        "optima": optima,
+        "misma_vola": misma_vola,
+        "aviso": aviso_fx,
+    }
 
 
 def calcular_inversiones_por_banco(df, cash):
