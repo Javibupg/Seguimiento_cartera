@@ -1,8 +1,27 @@
 import dash
 from dash import html, dcc, Input, Output, callback
 
-from auxfun import crear_tarjeta, crear_tabla_operaciones_cerradas, crear_tabla_inversiones_por_banco, crear_grafico_twr, crear_grafico_drawdown, formatear_resultado_con_rentabilidad
+from auxfun import crear_tarjeta, crear_tabla_operaciones_cerradas, crear_tabla_inversiones_por_banco, crear_tabla_proximos_dividendos, crear_grafico_twr, crear_grafico_drawdown, formatear_resultado_con_rentabilidad
 from datos import *
+
+
+ESTILO_BOTON_RESUMEN = {
+    "display": "inline-block",
+    "padding": "4px 8px",
+    "marginRight": "6px",
+    "border": "1px solid #d9d9d9",
+    "borderRadius": "2px",
+    "backgroundColor": "#f3f4f6",
+    "color": "#1f2937",
+    "fontSize": "12px",
+    "fontWeight": "500",
+    "lineHeight": "1.2",
+    "cursor": "pointer",
+}
+
+ESTILO_INPUT_OCULTO = {
+    "display": "none",
+}
 
 
 dash.register_page(
@@ -18,7 +37,7 @@ layout = html.Div(children=[
     html.P("Vista principal de rentabilidad TWR, capital invertido, drawdown y operaciones cerradas.", style={"color": "#6b7280", "marginBottom": "30px"}),
     html.Div(style={"backgroundColor": "white", "padding": "20px 24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)", "marginBottom": "30px"}, children=[
         html.Div("Vista", style={"fontSize": "14px", "fontWeight": "700", "color": "#374151", "marginBottom": "8px"}),
-        dcc.RadioItems(id="selector-divisa", options=[{"label": "EUR", "value": "eur"}, {"label": "USD", "value": "usd"}], value="eur", inline=True, labelStyle=ESTILO_BOTON, inputStyle={"marginRight": "8px"})
+        dcc.RadioItems(id="selector-divisa", options=[{"label": "EUR", "value": "eur"}, {"label": "USD", "value": "usd"}], value="eur", inline=True, labelStyle=ESTILO_BOTON_RESUMEN, inputStyle=ESTILO_INPUT_OCULTO)
     ]),
     html.Div(style={"display": "grid", "gridTemplateColumns": "repeat(3, 1fr)", "gap": "20px", "marginBottom": "30px"}, children=[
         crear_tarjeta("Capital invertido EUR", "€0.00", id_titulo="tarjeta-total-titulo", id_valor="tarjeta-total-valor"),
@@ -29,14 +48,22 @@ layout = html.Div(children=[
     ]),
     html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)"}, children=[
         html.Div("Tipo de gráfico", style={"fontSize": "14px", "fontWeight": "700", "color": "#374151", "marginBottom": "8px"}),
-        dcc.RadioItems(id="selector-grafico", options=[{"label": "Rentabilidad", "value": "rentabilidad"}, {"label": "Drawdown", "value": "drawdown"}], value="rentabilidad", inline=True, labelStyle=ESTILO_BOTON, inputStyle={"marginRight": "8px"}, style={"marginBottom": "20px"}),
+        dcc.RadioItems(id="selector-grafico", options=[{"label": "Rentabilidad", "value": "rentabilidad"}, {"label": "Drawdown", "value": "drawdown"}], value="rentabilidad", inline=True, labelStyle=ESTILO_BOTON_RESUMEN, inputStyle=ESTILO_INPUT_OCULTO, style={"marginBottom": "20px"}),
         html.Div("Periodo", style={"fontSize": "14px", "fontWeight": "700", "color": "#374151", "marginBottom": "8px"}),
-        dcc.RadioItems(id="selector-periodo", options=[{"label": v["label"], "value": k} for k, v in PERIODOS.items()], value="max", inline=True, labelStyle=ESTILO_BOTON, inputStyle={"marginRight": "8px"}, style={"marginBottom": "20px"}),
+        dcc.RadioItems(id="selector-periodo", options=[{"label": v["label"], "value": k} for k, v in PERIODOS.items()], value="max", inline=True, labelStyle=ESTILO_BOTON_RESUMEN, inputStyle=ESTILO_INPUT_OCULTO, style={"marginBottom": "20px"}),
         dcc.Graph(id="grafico-cartera", config={"displayModeBar": True, "scrollZoom": True})
     ]),
     html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)", "marginTop": "30px"}, children=[
         html.H3("Operaciones cerradas", style={"color": "#111827", "marginBottom": "20px"}),
         crear_tabla_operaciones_cerradas(operaciones_cerradas)
+    ]),
+    html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)", "marginTop": "30px"}, children=[
+        html.H3("Próximos dividendos", style={"color": "#111827", "marginBottom": "8px"}),
+        html.P(
+            "Dividendos anunciados o estimados para las posiciones abiertas con dividendo disponible. El dividend yield se muestra anualizado; si Yahoo no publica fecha futura, se indica como sin fecha anunciada.",
+            style={"color": "#6b7280", "marginBottom": "20px"},
+        ),
+        crear_tabla_proximos_dividendos(proximos_dividendos)
     ]),
     html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)", "marginTop": "30px"}, children=[
         html.H3("Inversiones por banco", style={"color": "#111827", "marginBottom": "8px"}),

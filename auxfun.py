@@ -1,4 +1,5 @@
 from dash import html, dash_table
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -206,4 +207,84 @@ def crear_tabla_inversiones_por_banco(df):
                 "fontWeight": "700",
             },
         ],
+    )
+
+
+def crear_tabla_proximos_dividendos(df):
+    if df.empty:
+        return html.Div(
+            "No hay datos de próximos dividendos disponibles.",
+            style={"color": "#6b7280", "padding": "20px"},
+        )
+
+    tabla = df.copy()
+
+    def formato_fecha(valor):
+        if valor is None or pd.isna(valor) or getattr(valor, "strftime", None) is None:
+            return "No anunciado"
+        return valor.strftime("%d/%m/%Y")
+
+    def formato_importe(valor, divisa):
+        if valor is None or pd.isna(valor):
+            return "Dato no disponible"
+        simbolo = "€" if str(divisa).upper() == "EUR" else "$" if str(divisa).upper() == "USD" else ""
+        sufijo = "" if simbolo else f" {divisa}" if divisa else ""
+        return f"{simbolo}{valor:,.2f}{sufijo}"
+
+    tabla["Fecha"] = tabla["Fecha"].map(formato_fecha)
+    tabla["Acciones"] = tabla["Acciones"].map(lambda x: f"{x:,.4f}")
+    tabla["Dividendo_accion"] = [
+        formato_importe(valor, divisa)
+        for valor, divisa in zip(tabla["Dividendo_accion"], tabla["Divisa"])
+    ]
+    tabla["Importe_estimado"] = [
+        formato_importe(valor, divisa)
+        for valor, divisa in zip(tabla["Importe_estimado"], tabla["Divisa"])
+    ]
+    tabla["Dividend_yield"] = tabla["Dividend_yield"].map(
+        lambda x: "Dato no disponible" if pd.isna(x) else f"{x * 100:.2f}%"
+    )
+
+    tabla = tabla.rename(
+        columns={
+            "Activo": "Activo",
+            "Acciones": "Acciones",
+            "Fecha": "Próxima fecha",
+            "Dividendo_accion": "Dividendo por acción",
+            "Importe_estimado": "Importe estimado",
+            "Dividend_yield": "Dividend yield anualizado",
+            "Estado": "Estado",
+        }
+    )
+
+    columnas = [
+        "Activo",
+        "Acciones",
+        "Próxima fecha",
+        "Dividendo por acción",
+        "Importe estimado",
+        "Dividend yield anualizado",
+        "Estado",
+    ]
+
+    return dash_table.DataTable(
+        data=tabla[columnas].to_dict("records"),
+        columns=[{"name": c, "id": c} for c in columnas],
+        page_action="none",
+        fixed_rows={"headers": True},
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "fontFamily": "Arial, sans-serif",
+            "fontSize": "14px",
+            "padding": "10px",
+            "textAlign": "center",
+            "minWidth": "130px",
+            "whiteSpace": "normal",
+        },
+        style_header={
+            "backgroundColor": "#f3f4f6",
+            "fontWeight": "700",
+            "color": "#111827",
+        },
+        style_data={"backgroundColor": "white", "color": "#111827"},
     )

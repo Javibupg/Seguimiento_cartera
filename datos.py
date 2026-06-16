@@ -36,6 +36,12 @@ except Exception as e:
     print(f"Aviso: no se pudo calcular el resumen por banco: {e}")
     inversiones_por_banco = pd.DataFrame()
 
+try:
+    proximos_dividendos = calcular_proximos_dividendos(operaciones)
+except Exception as e:
+    print(f"Aviso: no se pudieron calcular los próximos dividendos: {e}")
+    proximos_dividendos = pd.DataFrame()
+
 # Alias para no romper imports antiguos.
 cartera_eur = series_cartera.get("Valor_cartera_EUR", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")
 flujos_eur = series_cartera.get("Flujos_EUR", pd.Series(dtype="float64")) if not series_cartera.empty else pd.Series(dtype="float64")

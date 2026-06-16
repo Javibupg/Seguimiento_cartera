@@ -16,6 +16,100 @@ def _sin_inf(s):
     return s.replace([float("inf"), -float("inf")], 0).fillna(0)
 
 
+def _valor_info(info, claves):
+    for clave in claves:
+        valor = info.get(clave)
+        if valor is not None and valor != "":
+            return valor
+    return None
+
+
+def _fecha_yahoo(valor):
+    if valor is None or pd.isna(valor):
+        return None
+
+    try:
+        if isinstance(valor, (int, float)):
+            fecha = pd.to_datetime(valor, unit="s")
+        else:
+            fecha = pd.to_datetime(valor)
+    except Exception:
+        return None
+
+    if pd.isna(fecha):
+        return None
+
+    if getattr(fecha, "tzinfo", None) is not None:
+        fecha = fecha.tz_localize(None)
+
+    return pd.Timestamp(fecha).normalize()
+
+
+def _precio_actual_info(info):
+    for campo in ["currentPrice", "regularMarketPrice", "previousClose"]:
+        valor = _valor_info(info, [campo])
+        if valor is not None and float(valor) > 0:
+            return float(valor)
+    return None
+
+
+def _dividendos_historicos(ticker_yahoo):
+    try:
+        dividendos = ticker_yahoo.dividends
+    except Exception:
+        return pd.Series(dtype="float64")
+
+    if dividendos is None or dividendos.empty:
+        return pd.Series(dtype="float64")
+
+    dividendos = dividendos.copy()
+    dividendos.index = pd.to_datetime(dividendos.index)
+    if getattr(dividendos.index, "tz", None) is not None:
+        dividendos.index = dividendos.index.tz_localize(None)
+    return dividendos.dropna().astype(float)
+
+
+def _frecuencia_dividendos_anual(dividendos):
+    if dividendos.empty:
+        return None
+
+    fecha_inicio = pd.Timestamp.today().normalize() - pd.DateOffset(months=18)
+    recientes = dividendos[dividendos.index >= fecha_inicio]
+
+    if len(recientes) >= 2:
+        return min(max(round(len(recientes) / 1.5), 1), 12)
+
+    fecha_inicio = pd.Timestamp.today().normalize() - pd.DateOffset(years=3)
+    recientes = dividendos[dividendos.index >= fecha_inicio]
+
+    if len(recientes) >= 2:
+        return min(max(round(len(recientes) / 3), 1), 12)
+
+    return 1
+
+
+def _dividendo_anualizado_forward(dividendos, info=None):
+    dividendo_anual_info = _valor_info(info or {}, ["dividendRate"])
+    try:
+        dividendo_anual_info = None if dividendo_anual_info is None else float(dividendo_anual_info)
+    except (TypeError, ValueError):
+        dividendo_anual_info = None
+
+    if dividendo_anual_info is not None and dividendo_anual_info > 0:
+        return dividendo_anual_info
+
+    if dividendos.empty:
+        return None
+
+    ultimo_dividendo = float(dividendos.iloc[-1])
+    frecuencia = _frecuencia_dividendos_anual(dividendos)
+
+    if ultimo_dividendo <= 0 or not frecuencia:
+        return None
+
+    return ultimo_dividendo * frecuencia
+
+
 def _inferir_divisa_activo(activo):
     ticker = str(activo).upper().strip()
     return "EUR" if ticker.endswith(SUFIJOS_EUR) else "USD"
@@ -517,6 +611,72 @@ def calcular_inversiones_por_banco(df, cash):
             "Rentabilidad",
         ]
     ]
+
+
+def calcular_proximos_dividendos(df):
+    posiciones = calcular_posiciones_actuales(df)
+
+    if posiciones.empty:
+        return pd.DataFrame()
+
+    hoy = pd.Timestamp.today().normalize()
+    filas = []
+
+    for ticker, acciones in posiciones.items():
+        try:
+            ticker_yahoo = yf.Ticker(ticker)
+            info = ticker_yahoo.get_info() if hasattr(ticker_yahoo, "get_info") else ticker_yahoo.info
+        except Exception:
+            ticker_yahoo = None
+            info = {}
+
+        fecha_ex = _fecha_yahoo(_valor_info(info, ["exDividendDate"]))
+        fecha_pago = _fecha_yahoo(_valor_info(info, ["dividendDate"]))
+        fecha_proxima = fecha_pago or fecha_ex
+
+        if fecha_proxima is not None and fecha_proxima < hoy:
+            fecha_proxima = None
+
+        dividendos = _dividendos_historicos(ticker_yahoo) if ticker_yahoo is not None else pd.Series(dtype="float64")
+        dividendo_accion = None if dividendos.empty else float(dividendos.iloc[-1])
+        dividendo_anual = _dividendo_anualizado_forward(dividendos, info)
+        precio = _precio_actual_info(info)
+        dividend_yield = dividendo_anual / precio if dividendo_anual is not None and precio else None
+        importe_estimado = float(acciones) * dividendo_accion if dividendo_accion is not None else None
+        divisa = _valor_info(info, ["currency", "financialCurrency"])
+
+        if fecha_proxima is None and dividendo_accion is None and dividend_yield is None:
+            continue
+
+        if fecha_proxima is not None:
+            estado = "Anunciado"
+        elif dividendo_accion is not None or dividend_yield is not None:
+            estado = "Sin fecha anunciada"
+        else:
+            estado = "Sin dato"
+
+        filas.append(
+            {
+                "Activo": ticker,
+                "Acciones": float(acciones),
+                "Divisa": divisa,
+                "Fecha": fecha_proxima,
+                "Fecha_ex": fecha_ex,
+                "Dividendo_accion": dividendo_accion,
+                "Importe_estimado": importe_estimado,
+                "Dividend_yield": dividend_yield,
+                "Estado": estado,
+            }
+        )
+
+    dividendos = pd.DataFrame(filas)
+
+    if dividendos.empty:
+        return dividendos
+
+    dividendos["orden_fecha"] = dividendos["Fecha"].fillna(pd.Timestamp.max)
+    dividendos = dividendos.sort_values(["orden_fecha", "Activo"]).drop(columns="orden_fecha")
+    return dividendos.reset_index(drop=True)
 
 
 def calcular_desglose_fx_eur(df, cash):
