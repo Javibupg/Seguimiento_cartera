@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from cache_precios import cargar_cierres_varios
+
 EXCEL_PATH = Path("Libro_inversiones.xlsx")
 MONEDAS_SOPORTADAS = {"EUR", "USD"}
 SUFIJOS_EUR = (".MI", ".PA", ".MC", ".DE", ".AS", ".BR", ".VI", ".F", ".MU", ".BE", ".HM", ".DU")
@@ -307,26 +309,7 @@ def calcular_posiciones_actuales(df):
 
 def descargar_precios(tickers, fecha_inicio):
     tickers = [tickers] if isinstance(tickers, str) else list(tickers)
-    datos = yf.download(tickers=tickers, start=fecha_inicio, auto_adjust=True, progress=False)
-
-    if datos.empty:
-        return pd.DataFrame(columns=tickers)
-
-    if isinstance(datos.columns, pd.MultiIndex):
-        if "Close" in datos.columns.get_level_values(0):
-            precios = datos["Close"]
-        elif "Close" in datos.columns.get_level_values(-1):
-            precios = datos.xs("Close", axis=1, level=-1)
-        else:
-            return pd.DataFrame(columns=tickers)
-    else:
-        precios = datos["Close"] if "Close" in datos.columns else datos
-
-    if isinstance(precios, pd.Series):
-        precios = precios.to_frame(name=tickers[0])
-
-    precios = precios.reindex(columns=tickers)
-    return precios.ffill().dropna(how="all")
+    return cargar_cierres_varios(tickers, start=fecha_inicio)
 
 
 def descargar_fx_usdeur(fecha_inicio, indice=None):

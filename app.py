@@ -1,7 +1,6 @@
 import webbrowser
 from threading import Timer
 
-import dash
 from dash import Dash, html, page_container, page_registry
 
 

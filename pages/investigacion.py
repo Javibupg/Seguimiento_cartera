@@ -1,4 +1,5 @@
 import dash
+import pandas as pd
 from dash import Input, Output, callback, dcc, html
 
 from investigacion_utils import (
@@ -31,6 +32,26 @@ COLOR_MUTED = "#6b7280"
 COLOR_BORDE = "#e5e7eb"
 VERDE = "#16a34a"
 ROJO = "#dc2626"
+PERIODOS_PRECIO = {
+    "1m": {"label": "1M", "offset": pd.DateOffset(months=1)},
+    "6m": {"label": "6M", "offset": pd.DateOffset(months=6)},
+    "1y": {"label": "1A", "offset": pd.DateOffset(years=1)},
+    "5y": {"label": "5A", "offset": pd.DateOffset(years=5)},
+    "max": {"label": "Máx", "offset": None},
+}
+ESTILO_BOTON_PERIODO = {
+    "display": "inline-block",
+    "padding": "4px 8px",
+    "marginRight": "6px",
+    "border": "1px solid #d9d9d9",
+    "borderRadius": "2px",
+    "backgroundColor": "#f3f4f6",
+    "color": "#1f2937",
+    "fontSize": "12px",
+    "fontWeight": "500",
+    "lineHeight": "1.2",
+    "cursor": "pointer",
+}
 
 
 DESCRIPCIONES_METRICAS = {
@@ -301,6 +322,16 @@ layout = html.Div(
                 "boxShadow": "0 4px 14px rgba(0,0,0,0.08)",
             },
             children=[
+                html.Div("Periodo", style={"fontSize": "14px", "fontWeight": "700", "color": "#374151", "marginBottom": "8px"}),
+                dcc.RadioItems(
+                    id="selector-periodo-investigacion",
+                    options=[{"label": v["label"], "value": k} for k, v in PERIODOS_PRECIO.items()],
+                    value="max",
+                    inline=True,
+                    labelStyle=ESTILO_BOTON_PERIODO,
+                    inputStyle={"display": "none"},
+                    style={"marginBottom": "20px"},
+                ),
                 dcc.Loading(
                     type="circle",
                     children=dcc.Graph(
@@ -357,6 +388,15 @@ def construir_flags(flags):
     return [tarjeta_flag(flag) for flag in flags]
 
 
+def filtrar_periodo(precios, periodo):
+    offset = PERIODOS_PRECIO.get(periodo, PERIODOS_PRECIO["max"])["offset"]
+    if precios.empty or offset is None:
+        return precios
+    fin = precios.index.max()
+    filtrado = precios.loc[precios.index >= fin - offset]
+    return filtrado if not filtrado.empty else precios.tail(1)
+
+
 @callback(
     Output("aviso-investigacion", "children"),
     Output("cabecera-investigacion", "children"),
@@ -367,14 +407,16 @@ def construir_flags(flags):
     Output("metricas-fundamentales-investigacion", "children"),
     Output("metricas-macro-investigacion", "children"),
     Input("selector-activo-investigacion", "value"),
+    Input("selector-periodo-investigacion", "value"),
 )
-def actualizar_investigacion(ticker):
+def actualizar_investigacion(ticker, periodo):
     if not ticker or activos_investigacion.empty:
         fig = crear_grafico_precio(
             descargar_precios_investigacion(""),
             "",
             "Sin activo",
         )
+        fig.update_xaxes(rangeselector={"visible": False})
         aviso = "No hay activos marcados con Seguimiento = sí en la hoja Listado de activos."
         return aviso, [], fig, [], [], [], [], []
 
@@ -384,7 +426,8 @@ def actualizar_investigacion(ticker):
     benchmark = activo.get("Benchmark")
 
     precios = descargar_precios_investigacion(ticker)
-    fig = crear_grafico_precio(precios, ticker, nombre)
+    fig = crear_grafico_precio(filtrar_periodo(precios, periodo), ticker, nombre, precios)
+    fig.update_xaxes(rangeselector={"visible": False})
 
     ultima_fecha = precios.index[-1].strftime("%d/%m/%Y") if not precios.empty else None
 

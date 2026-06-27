@@ -6,6 +6,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 
+from cache_precios import cargar_cierres
+
 
 EXCEL_PATH = Path("Libro_inversiones.xlsx")
 DATO_NO_DISPONIBLE = "Dato no disponible"
@@ -59,56 +61,11 @@ def obtener_activo(activos, ticker):
     return fila.iloc[0].to_dict()
 
 
-def _extraer_close(datos, ticker=None):
-    if datos is None or datos.empty:
-        return pd.Series(dtype="float64")
-
-    if isinstance(datos.columns, pd.MultiIndex):
-        if "Close" in datos.columns.get_level_values(0):
-            close = datos["Close"]
-        elif "Close" in datos.columns.get_level_values(-1):
-            close = datos.xs("Close", axis=1, level=-1)
-        else:
-            return pd.Series(dtype="float64")
-
-        if isinstance(close, pd.DataFrame):
-            if ticker in close.columns:
-                close = close[ticker]
-            else:
-                close = close.iloc[:, 0]
-        return close.dropna().astype(float)
-
-    if "Close" in datos.columns:
-        return datos["Close"].dropna().astype(float)
-    if "Adj Close" in datos.columns:
-        return datos["Adj Close"].dropna().astype(float)
-
-    return pd.Series(dtype="float64")
-
-
 @lru_cache(maxsize=128)
 def descargar_precios_investigacion(ticker, periodo="5y"):
     if not ticker:
         return pd.Series(dtype="float64")
-
-    try:
-        datos = yf.download(
-            ticker,
-            period=periodo,
-            auto_adjust=True,
-            progress=False,
-            threads=False,
-        )
-    except Exception:
-        return pd.Series(dtype="float64")
-
-    precios = _extraer_close(datos, ticker)
-    if precios.empty:
-        return precios
-
-    precios.index = pd.to_datetime(precios.index).tz_localize(None)
-    precios.name = ticker
-    return precios.dropna().astype(float)
+    return cargar_cierres(ticker, period=periodo)
 
 
 def _rentabilidad_periodo(precios, sesiones):
@@ -337,6 +294,7 @@ def obtener_fundamentales(ticker):
     ]
 
 
+@lru_cache(maxsize=1)
 def calcular_metricas_macro():
     indicadores = [
         ("^VIX", "VIX", "numero"),
@@ -688,9 +646,10 @@ def calcular_flags_inversion(metricas_activo, metricas_relativas, metricas_funda
     ]
 
 
-def crear_grafico_precio(precios, ticker, nombre):
+def crear_grafico_precio(precios, ticker, nombre, precios_medias=None):
     fig = go.Figure()
     precios = precios.dropna()
+    precios_medias = precios if precios_medias is None else precios_medias.dropna()
 
     if precios.empty:
         fig.update_layout(
@@ -711,8 +670,8 @@ def crear_grafico_precio(precios, ticker, nombre):
         )
         return fig
 
-    media_50 = precios.rolling(50).mean()
-    media_200 = precios.rolling(200).mean()
+    media_50 = precios_medias.rolling(50).mean().reindex(precios.index)
+    media_200 = precios_medias.rolling(200).mean().reindex(precios.index)
 
     fig.add_trace(
         go.Scatter(

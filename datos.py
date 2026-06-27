@@ -1,7 +1,17 @@
 import pandas as pd
 
-from cartera_utils import *
 from auxfun import titulo_tarjeta
+from cartera_utils import (
+    calcular_distribucion_actual_multidivisa,
+    calcular_inversiones_por_banco,
+    calcular_operaciones_cerradas,
+    calcular_proximos_dividendos,
+    calcular_series_cartera_multidivisa,
+    calcular_vol_sharpe,
+    cargar_movimientos_cash,
+    cargar_operaciones,
+    obtener_rf_anual_eur,
+)
 
 RF_ANUAL, RF_FECHA = obtener_rf_anual_eur()
 TOOLTIP_TWR = "Rentabilidad TWR no anualizada. Ajusta las aportaciones y retiradas para que meter dinero nuevo no baje ni suba artificialmente la rentabilidad."

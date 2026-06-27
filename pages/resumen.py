@@ -1,8 +1,30 @@
 import dash
 from dash import html, dcc, Input, Output, callback
 
-from auxfun import crear_tarjeta, crear_tabla_operaciones_cerradas, crear_tabla_inversiones_por_banco, crear_tabla_proximos_dividendos, crear_grafico_twr, crear_grafico_drawdown, formatear_resultado_con_rentabilidad
-from datos import *
+from auxfun import (
+    crear_grafico_drawdown,
+    crear_grafico_twr,
+    crear_tabla_inversiones_por_banco,
+    crear_tabla_operaciones_cerradas,
+    crear_tabla_proximos_dividendos,
+    crear_tarjeta,
+    formatear_resultado_con_rentabilidad,
+)
+from datos import (
+    PERIODOS,
+    TOOLTIP_TWR,
+    calcular_metricas_periodo,
+    formatear_importe,
+    inversiones_por_banco,
+    operaciones_cerradas,
+    preparar_datos_divisa,
+    proximos_dividendos,
+    simbolo_divisa,
+    titulo_primera_tarjeta,
+    titulo_resultado,
+    titulo_sharpe,
+    tooltip_sharpe,
+)
 
 
 ESTILO_BOTON_RESUMEN = {
