@@ -5,6 +5,7 @@ from auxfun import (
     crear_grafico_drawdown,
     crear_grafico_twr,
     crear_tabla_inversiones_por_banco,
+    crear_tabla_operaciones_abiertas,
     crear_tabla_operaciones_cerradas,
     crear_tabla_proximos_dividendos,
     crear_tarjeta,
@@ -16,6 +17,7 @@ from datos import (
     calcular_metricas_periodo,
     formatear_importe,
     inversiones_por_banco,
+    operaciones_abiertas,
     operaciones_cerradas,
     preparar_datos_divisa,
     proximos_dividendos,
@@ -74,6 +76,10 @@ layout = html.Div(children=[
         html.Div("Periodo", style={"fontSize": "14px", "fontWeight": "700", "color": "#374151", "marginBottom": "8px"}),
         dcc.RadioItems(id="selector-periodo", options=[{"label": v["label"], "value": k} for k, v in PERIODOS.items()], value="max", inline=True, labelStyle=ESTILO_BOTON_RESUMEN, inputStyle=ESTILO_INPUT_OCULTO, style={"marginBottom": "20px"}),
         dcc.Graph(id="grafico-cartera", config={"displayModeBar": True, "scrollZoom": True})
+    ]),
+    html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)", "marginTop": "30px"}, children=[
+        html.H3("Operaciones abiertas", style={"color": "#111827", "marginBottom": "20px"}),
+        crear_tabla_operaciones_abiertas(operaciones_abiertas)
     ]),
     html.Div(style={"backgroundColor": "white", "padding": "24px", "borderRadius": "18px", "boxShadow": "0 4px 14px rgba(0,0,0,0.08)", "marginTop": "30px"}, children=[
         html.H3("Operaciones cerradas", style={"color": "#111827", "marginBottom": "20px"}),

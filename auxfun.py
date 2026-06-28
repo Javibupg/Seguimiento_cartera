@@ -21,6 +21,35 @@ ESTILO_CABECERA_TABLA = {
 ESTILO_DATOS_TABLA = {"backgroundColor": "white", "color": "#111827"}
 
 
+def formato_eur(valor, con_signo=False):
+    signo = "+" if con_signo and valor > 0 else ""
+    return f"{signo}€{valor:,.2f}"
+
+
+def formato_porcentaje(valor, con_signo=False):
+    signo = "+" if con_signo and valor > 0 else ""
+    return f"{signo}{valor * 100:.2f}%"
+
+
+def formato_divisa(valor, divisa, con_signo=False):
+    if valor is None or pd.isna(valor):
+        return "Dato no disponible"
+    simbolo = "€" if str(divisa).upper() == "EUR" else "$" if str(divisa).upper() == "USD" else ""
+    sufijo = "" if simbolo else f" {divisa}" if divisa else ""
+    signo = "+" if con_signo and valor > 0 else ""
+    return f"{signo}{simbolo}{valor:,.2f}{sufijo}"
+
+
+def estilos_signo(columnas):
+    estilos = []
+    for col in columnas:
+        estilos.extend([
+            {"if": {"column_id": col, "filter_query": f"{{{col}}} contains '+'"}, "color": VERDE, "fontWeight": "700"},
+            {"if": {"column_id": col, "filter_query": f"{{{col}}} contains '-'"}, "color": ROJO, "fontWeight": "700"},
+        ])
+    return estilos
+
+
 def formatear_resultado_con_rentabilidad(importe, rentabilidad, simbolo):
     color, signo = (VERDE, "+") if rentabilidad >= 0 else (ROJO, "")
     return [
@@ -274,17 +303,63 @@ def crear_tabla_operaciones_cerradas(df):
     if df.empty:
         return html.Div("Todavía no hay operaciones cerradas.", style=ESTILO_TEXTO_MUTED)
     tabla = df.copy()
-    tabla["Capital_invertido"] = tabla["Capital_invertido"].map(lambda x: f"€{x:,.2f}")
+    tabla["Capital_invertido"] = tabla["Capital_invertido"].map(formato_eur)
     for col in ["Rentabilidad", "Rent. anualizada"]:
-        tabla[col] = tabla[col].map(lambda x: f"{x * 100:.2f}%")
+        tabla[col] = tabla[col].map(lambda x: formato_porcentaje(x, con_signo=True))
     tabla = tabla.rename(columns={"Capital_invertido": "Capital invertido EUR"})
-    columnas = ["Activo", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital invertido EUR"]
+    columnas = ["Nombre", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital invertido EUR"]
 
     return crear_data_table(
         tabla,
         columnas,
         style_table={"height": "300px", "overflowY": "auto", "overflowX": "auto"},
         min_width="120px",
+        style_data_conditional=estilos_signo(["Rentabilidad", "Rent. anualizada"]),
+    )
+
+
+def crear_tabla_operaciones_abiertas(df):
+    if df.empty:
+        return html.Div("No hay operaciones abiertas.", style=ESTILO_TEXTO_MUTED)
+
+    tabla = df.copy()
+    tabla["Acciones"] = tabla["Acciones"].map(lambda x: f"{x:,.4f}")
+    for col in ["Precio_pagado_EUR", "Valor_EUR"]:
+        tabla[col] = tabla[col].map(formato_eur)
+    tabla["Resultado"] = tabla["Resultado"].map(lambda x: formato_eur(x, con_signo=True))
+    tabla["Rentabilidad"] = tabla["Rentabilidad"].map(lambda x: formato_porcentaje(x, con_signo=True))
+    tabla["Rent. anualizada"] = tabla["Rent. anualizada"].map(lambda x: formato_porcentaje(x, con_signo=True))
+
+    tabla = tabla.rename(
+        columns={
+            "Precio_pagado_EUR": "Capital invertido EUR",
+            "Valor_EUR": "Valor actual EUR",
+            "Resultado": "Resultado no realizado EUR",
+            "Rentabilidad": "Rentabilidad no realizada",
+            "Rent. anualizada": "Rentabilidad anualizada",
+        }
+    )
+    columnas = [
+        "Nombre",
+        "Periodo",
+        "Acciones",
+        "Capital invertido EUR",
+        "Valor actual EUR",
+        "Resultado no realizado EUR",
+        "Rentabilidad no realizada",
+        "Rentabilidad anualizada",
+    ]
+
+    return crear_data_table(
+        tabla,
+        columnas,
+        style_table={"height": "300px", "overflowY": "auto", "overflowX": "auto"},
+        min_width="120px",
+        style_data_conditional=estilos_signo([
+            "Resultado no realizado EUR",
+            "Rentabilidad no realizada",
+            "Rentabilidad anualizada",
+        ]),
     )
 
 
@@ -317,16 +392,10 @@ def crear_tabla_inversiones_por_banco(df):
         )
 
     tabla = df.copy()
-    columnas_importe = [
-        "Capital_invertido_EUR",
-        "Capital_sujeto_riesgo_EUR",
-        "Resultado_EUR",
-    ]
-
-    for col in columnas_importe:
-        tabla[col] = tabla[col].map(lambda x: f"€{x:,.2f}")
-
-    tabla["Rentabilidad"] = tabla["Rentabilidad"].map(lambda x: f"{x * 100:.2f}%")
+    for col in ["Capital_invertido_EUR", "Capital_sujeto_riesgo_EUR"]:
+        tabla[col] = tabla[col].map(formato_eur)
+    tabla["Resultado_EUR"] = tabla["Resultado_EUR"].map(lambda x: formato_eur(x, con_signo=True))
+    tabla["Rentabilidad"] = tabla["Rentabilidad"].map(lambda x: formato_porcentaje(x, con_signo=True))
 
     tabla = tabla.rename(
         columns={
@@ -356,16 +425,7 @@ def crear_tabla_inversiones_por_banco(df):
                 "fontWeight": "700",
                 "backgroundColor": "#f9fafb",
             },
-            {
-                "if": {"column_id": "Subida / bajada EUR", "filter_query": "{Subida / bajada EUR} contains '-'"},
-                "color": ROJO,
-                "fontWeight": "700",
-            },
-            {
-                "if": {"column_id": "Subida / bajada %", "filter_query": "{Subida / bajada %} contains '-'"},
-                "color": ROJO,
-                "fontWeight": "700",
-            },
+            *estilos_signo(["Subida / bajada EUR", "Subida / bajada %"]),
         ],
     )
 
@@ -384,21 +444,14 @@ def crear_tabla_proximos_dividendos(df):
             return "No anunciado"
         return valor.strftime("%d/%m/%Y")
 
-    def formato_importe(valor, divisa):
-        if valor is None or pd.isna(valor):
-            return "Dato no disponible"
-        simbolo = "€" if str(divisa).upper() == "EUR" else "$" if str(divisa).upper() == "USD" else ""
-        sufijo = "" if simbolo else f" {divisa}" if divisa else ""
-        return f"{simbolo}{valor:,.2f}{sufijo}"
-
     tabla["Fecha"] = tabla["Fecha"].map(formato_fecha)
     tabla["Acciones"] = tabla["Acciones"].map(lambda x: f"{x:,.4f}")
     tabla["Dividendo_accion"] = [
-        formato_importe(valor, divisa)
+        formato_divisa(valor, divisa)
         for valor, divisa in zip(tabla["Dividendo_accion"], tabla["Divisa"])
     ]
     tabla["Importe_estimado"] = [
-        formato_importe(valor, divisa)
+        formato_divisa(valor, divisa)
         for valor, divisa in zip(tabla["Importe_estimado"], tabla["Divisa"])
     ]
     tabla["Dividend_yield"] = tabla["Dividend_yield"].map(

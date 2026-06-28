@@ -2,8 +2,10 @@ import pandas as pd
 
 from auxfun import titulo_tarjeta
 from cartera_utils import (
+    calcular_cash_disponible,
     calcular_distribucion_actual_multidivisa,
     calcular_inversiones_por_banco,
+    calcular_operaciones_abiertas,
     calcular_operaciones_cerradas,
     calcular_proximos_dividendos,
     calcular_series_cartera_multidivisa,
@@ -34,6 +36,18 @@ series_cartera = calcular_series_cartera_multidivisa(operaciones, cash)
 
 # La tabla de operaciones cerradas es informativa. No debe bloquear el arranque
 # de la app si falta algún tipo de cambio histórico o si Yahoo no responde.
+try:
+    operaciones_abiertas = calcular_operaciones_abiertas(operaciones, cash)
+except Exception as e:
+    print(f"Aviso: no se pudieron calcular las operaciones abiertas: {e}")
+    operaciones_abiertas = pd.DataFrame()
+
+try:
+    cash_disponible = calcular_cash_disponible(operaciones, cash)
+except Exception as e:
+    print(f"Aviso: no se pudo calcular el cash disponible: {e}")
+    cash_disponible = pd.DataFrame()
+
 try:
     operaciones_cerradas = calcular_operaciones_cerradas(operaciones)
 except Exception as e:

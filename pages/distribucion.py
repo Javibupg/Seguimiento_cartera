@@ -4,7 +4,7 @@ from dash import html, dcc, callback, Input, Output, dash_table
 import plotly.graph_objects as go
 
 from cartera_utils import calcular_optimizacion_montecarlo_sharpe
-from datos import ESTILO_BOTON, RF_ANUAL, RF_FECHA, calcular_distribucion_actual, cash, operaciones
+from datos import ESTILO_BOTON, RF_ANUAL, RF_FECHA, calcular_distribucion_actual, cash, cash_disponible, operaciones
 from auxfun import crear_tarjeta, titulo_tarjeta
 
 
@@ -31,35 +31,23 @@ def formatear_importe(valor, simbolo="€"):
     return f"{simbolo}{valor:,.2f}"
 
 
-def preparar_distribucion_sin_cash(df):
-    """Recalcula pesos únicamente entre activos, sin cash residual."""
-    if df is None or df.empty:
+def preparar_distribucion(df, cash_df):
+    if (df is None or df.empty) and cash_df.empty:
         return pd.DataFrame()
 
-    df = df.copy()
-
-    if "Activo" in df.columns:
-        df = df[df["Activo"].str.lower() != "cash"].copy()
-
-    if "Valor_EUR" not in df.columns:
-        df["Valor_EUR"] = 0.0
-
-    if "Valor_USD" not in df.columns:
-        df["Valor_USD"] = 0.0
-
-    if "Precio_pagado_EUR" not in df.columns:
-        if "Coste_total_EUR" in df.columns:
-            df["Precio_pagado_EUR"] = df["Coste_total_EUR"]
-        elif "Precio_medio_pagado_EUR" in df.columns and "Acciones" in df.columns:
-            df["Precio_pagado_EUR"] = df["Precio_medio_pagado_EUR"] * df["Acciones"]
-        else:
-            df["Precio_pagado_EUR"] = 0.0
-
-    if "Acciones" not in df.columns:
-        df["Acciones"] = 0.0
-
-    if "Divisa" not in df.columns:
-        df["Divisa"] = "-"
+    df = df.copy() if df is not None else pd.DataFrame()
+    cash_df = cash_df[cash_df["Cash"].abs() > 1e-9].copy() if "Cash" in cash_df else pd.DataFrame()
+    if not cash_df.empty:
+        fx = cash_df.loc[cash_df["Currency"].eq("USD"), "Tipo_cambio_EUR"].dropna()
+        fx = float(fx.iloc[-1]) if not fx.empty else 1.0
+        df = pd.concat([df, pd.DataFrame({
+            "Activo": "Cash " + cash_df["Currency"],
+            "Divisa": cash_df["Currency"],
+            "Acciones": cash_df["Cash"],
+            "Precio_pagado_EUR": cash_df["Valor_EUR"],
+            "Valor_EUR": cash_df["Valor_EUR"],
+            "Valor_USD": cash_df["Valor_EUR"] / fx,
+        })], ignore_index=True)
 
     valor_total = df["Valor_EUR"].sum()
     df["Peso"] = df["Valor_EUR"] / valor_total if valor_total != 0 else 0
@@ -486,7 +474,7 @@ layout = html.Div(
             style={"color": "#111827", "marginBottom": "5px"},
         ),
         html.P(
-            "Peso actual de cada activo sobre el total invertido en posiciones abiertas. Los importes principales se muestran en EUR.",
+            "Peso actual de cada activo y del cash disponible. Los importes principales se muestran en EUR.",
             style={"color": "#6b7280", "marginBottom": "30px"},
         ),
 
@@ -612,13 +600,13 @@ layout = html.Div(
 )
 def actualizar_distribucion(tipo_grafico):
     df, valor_eur, valor_usd = calcular_distribucion_actual()
-    df = preparar_distribucion_sin_cash(df)
+    df = preparar_distribucion(df, cash_disponible)
 
     if not df.empty:
         valor_eur = float(df["Valor_EUR"].sum())
         valor_usd = float(df["Valor_USD"].sum())
 
-    n_activos = len(df) if df is not None else 0
+    n_activos = len(df[~df["Activo"].astype(str).str.startswith("Cash")]) if not df.empty else 0
 
     return (
         figura_distribucion(df, tipo_grafico),

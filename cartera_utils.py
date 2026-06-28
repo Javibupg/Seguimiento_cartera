@@ -240,10 +240,12 @@ def cargar_movimientos_cash(path=EXCEL_PATH):
     cash.columns = cash.columns.str.strip()
     cash["Fecha"] = pd.to_datetime(cash["Fecha"])
     cash["Tipo"] = _limpiar_texto(cash["Tipo"])
-    cash["signo"] = cash["Tipo"].map({"aportación": 1, "aportacion": 1, "retirada": -1})
+    tipos_externos = {"aportación", "aportacion", "retirada"}
+    cash["signo"] = cash["Tipo"].map({"aportación": 1, "aportacion": 1, "retirada": -1, "dividendo": 1})
+    cash["Es_flujo_externo"] = cash["Tipo"].isin(tipos_externos)
 
     if cash["signo"].isna().any():
-        raise ValueError("Hay movimientos distintos de 'aportación' o 'retirada' en la hoja Cash.")
+        raise ValueError("Hay movimientos distintos de 'aportación', 'retirada' o 'dividendo' en la hoja Cash.")
 
     if "Currency" not in cash.columns and "Divisa" not in cash.columns:
         if "Tipo_cambio_EUR" in cash.columns:
@@ -426,9 +428,11 @@ def _calcular_base_cartera_eur(df, cash):
     )
 
     importes_cash_eur = _importes_cash_eur(cash, precios.index, fx_usdeur)
-    flujos_externos_eur = _alinear_flujos(cash["Fecha"], importes_cash_eur, precios.index)
+    flujos_cash_eur = _alinear_flujos(cash["Fecha"], importes_cash_eur, precios.index)
+    importes_externos_eur = importes_cash_eur.where(cash["Es_flujo_externo"], 0.0)
+    flujos_externos_eur = _alinear_flujos(cash["Fecha"], importes_externos_eur, precios.index)
 
-    cash_diario_eur = (flujos_operaciones_eur + flujos_externos_eur).cumsum()
+    cash_diario_eur = (flujos_operaciones_eur + flujos_cash_eur).cumsum()
     cartera_eur = valor_activos_eur + cash_diario_eur
     capital_eur = flujos_externos_eur.cumsum()
 
@@ -567,6 +571,104 @@ def calcular_distribucion_actual_multidivisa(df, cash):
 
     distribucion = distribucion.sort_values("Valor_EUR", ascending=False).reset_index(drop=True)
     return distribucion, valor_total_eur, valor_total_usd
+
+
+def calcular_operaciones_abiertas(df, cash):
+    distribucion, _, _ = calcular_distribucion_actual_multidivisa(df, cash)
+
+    if distribucion.empty:
+        return pd.DataFrame()
+
+    fechas_inicio = df[df["Orden"] == "compra"].groupby("Activo")["Fecha"].min()
+    nombres = cargar_listado_activos()
+    abiertas = distribucion.copy()
+    abiertas["Nombre"] = abiertas["Activo"].map(nombres).fillna(abiertas["Activo"])
+    abiertas["Fecha_inicio"] = abiertas["Activo"].map(fechas_inicio)
+    abiertas["Periodo"] = abiertas["Fecha_inicio"].dt.strftime("%d/%m/%y") + "-Abierta"
+    abiertas["Resultado"] = abiertas["Valor_EUR"] - abiertas["Precio_pagado_EUR"]
+    abiertas["Rentabilidad"] = abiertas["Resultado"] / abiertas["Precio_pagado_EUR"].replace(0, pd.NA)
+    abiertas["Rentabilidad"] = abiertas["Rentabilidad"].fillna(0.0)
+    dias = (pd.Timestamp.today().normalize() - abiertas["Fecha_inicio"]).dt.days.clip(lower=1)
+    abiertas["Rent. anualizada"] = _sin_inf((1 + abiertas["Rentabilidad"]) ** (365 / dias) - 1)
+
+    return abiertas[
+        [
+            "Activo",
+            "Nombre",
+            "Periodo",
+            "Acciones",
+            "Precio_pagado_EUR",
+            "Valor_EUR",
+            "Resultado",
+            "Rentabilidad",
+            "Rent. anualizada",
+        ]
+    ].sort_values("Resultado", ascending=False).reset_index(drop=True)
+
+
+def calcular_cash_disponible(df, cash):
+    movimientos = []
+    cash = _normalizar_banco(cash) if cash is not None else pd.DataFrame()
+
+    if not cash.empty:
+        movimientos.append(
+            cash[["Banco", "Currency", "Importe_firmado"]]
+            .rename(columns={"Importe_firmado": "Importe"})
+        )
+        dividendos = (
+            cash[cash["Tipo"].eq("dividendo")]
+            .groupby(["Banco", "Currency"])["Importe"]
+            .sum()
+            .rename("Dividendos")
+        )
+    else:
+        dividendos = pd.Series(
+            dtype="float64",
+            name="Dividendos",
+            index=pd.MultiIndex.from_tuples([], names=["Banco", "Currency"]),
+        )
+
+    if df is not None and not df.empty:
+        ops = _normalizar_banco(df)
+        ops_cash = ops[["Banco", "Currency", "Importe", "Orden"]].copy()
+        ops_cash["Importe"] *= ops_cash["Orden"].map({"compra": -1, "venta": 1})
+        movimientos.append(ops_cash[["Banco", "Currency", "Importe"]])
+
+    if not movimientos:
+        return pd.DataFrame()
+
+    resumen = (
+        pd.concat(movimientos, ignore_index=True)
+        .groupby(["Banco", "Currency"])["Importe"]
+        .sum()
+        .rename("Cash")
+        .to_frame()
+        .join(dividendos, how="outer")
+        .fillna(0.0)
+        .reset_index()
+    )
+    resumen = resumen[(resumen["Cash"].abs() > 1e-9) | (resumen["Dividendos"].abs() > 1e-9)]
+
+    if resumen.empty:
+        return resumen
+
+    fechas = []
+    if df is not None and not df.empty:
+        fechas.append(df["Fecha"].min())
+    if not cash.empty:
+        fechas.append(cash["Fecha"].min())
+    fecha_inicio = min(fechas) if fechas else pd.Timestamp.today().normalize()
+
+    fx_actual = (
+        float(descargar_fx_usdeur(fecha_inicio).dropna().iloc[-1])
+        if resumen["Currency"].eq("USD").any()
+        else 1.0
+    )
+    resumen["Tipo_cambio_EUR"] = resumen["Currency"].map({"EUR": 1.0, "USD": fx_actual})
+    resumen["Valor_EUR"] = resumen["Cash"] * resumen["Tipo_cambio_EUR"]
+    resumen["Dividendos_EUR"] = resumen["Dividendos"] * resumen["Tipo_cambio_EUR"]
+
+    return resumen.sort_values(["Banco", "Currency"]).reset_index(drop=True)
 
 
 def calcular_optimizacion_montecarlo_sharpe(
@@ -1074,8 +1176,10 @@ def calcular_operaciones_cerradas(df):
     dias = (operaciones["Fecha_fin"] - operaciones["Fecha_inicio"]).dt.days.clip(lower=1)
     operaciones["Rent. anualizada"] = (1 + operaciones["Rentabilidad"]) ** (365 / dias) - 1
     operaciones["Periodo"] = operaciones["Fecha_inicio"].dt.strftime("%d/%m/%y") + "-" + operaciones["Fecha_fin"].dt.strftime("%d/%m/%y")
+    nombres = cargar_listado_activos()
+    operaciones["Nombre"] = operaciones["Activo"].map(nombres).fillna(operaciones["Activo"])
 
-    return operaciones[["Activo", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital_invertido"]]
+    return operaciones[["Activo", "Nombre", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital_invertido"]]
 
 
 def obtener_rf_anual_eur(fallback=0.02):
