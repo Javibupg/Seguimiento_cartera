@@ -13,7 +13,7 @@ from auxfun import (
 )
 from datos import (
     PERIODOS,
-    TOOLTIP_TWR,
+    TOOLTIP_RESULTADO,
     calcular_metricas_periodo,
     formatear_importe,
     inversiones_por_banco,
@@ -66,7 +66,7 @@ layout = html.Div(children=[
     html.Div(style={"display": "grid", "gridTemplateColumns": "repeat(3, 1fr)", "gap": "20px", "marginBottom": "30px"}, children=[
         crear_tarjeta("Capital invertido EUR", "€0.00", id_titulo="tarjeta-total-titulo", id_valor="tarjeta-total-valor"),
         crear_tarjeta("Valor actual EUR", "€0.00", id_titulo="tarjeta-valor-titulo", id_valor="tarjeta-valor-valor"),
-        crear_tarjeta("Resultado EUR", "€0.00", id_titulo="tarjeta-resultado-titulo", id_valor="tarjeta-resultado-valor", tooltip=TOOLTIP_TWR),
+        crear_tarjeta("Resultado EUR", "€0.00", id_titulo="tarjeta-resultado-titulo", id_valor="tarjeta-resultado-valor", tooltip=TOOLTIP_RESULTADO),
         crear_tarjeta("Volatilidad anualizada EUR", "0.00%", id_titulo="tarjeta-vol-titulo", id_valor="tarjeta-vol-valor"),
         crear_tarjeta("Sharpe EUR", "0.00", id_titulo="tarjeta-sharpe-titulo", id_valor="tarjeta-sharpe-valor", tooltip=tooltip_sharpe()),
     ]),
@@ -127,18 +127,18 @@ def actualizar_dashboard(divisa, tipo_grafico, periodo):
     )
     fig.update_layout(title={"text": f"{fig.layout.title.text} · {nombre_periodo}", "x": 0.05, "xanchor": "left", "y": 0.99, "yanchor": "top"})
 
-    primera, valor_final, resultado, twr, vol, sharpe = calcular_metricas_periodo(datos["valor"], datos["capital"], datos["flujos"], datos["twr"], periodo)
+    metricas = calcular_metricas_periodo(datos["valor"], datos["capital"], datos["flujos"], datos["twr"], periodo)
 
     return (
         fig,
         titulo_primera_tarjeta(divisa_txt, periodo),
-        formatear_importe(primera, simbolo),
+        formatear_importe(metricas["referencia"], simbolo),
         f"Valor actual {divisa_txt}",
-        formatear_importe(valor_final, simbolo),
+        formatear_importe(metricas["valor_final"], simbolo),
         titulo_resultado(divisa_txt, periodo),
-        formatear_resultado_con_rentabilidad(resultado, twr, simbolo),
+        formatear_resultado_con_rentabilidad(metricas["resultado"], metricas["rentabilidad_resultado"], simbolo),
         f"Volatilidad anualizada {divisa_txt}",
-        f"{vol * 100:.2f}%",
+        f"{metricas['vol'] * 100:.2f}%",
         titulo_sharpe(divisa_txt),
-        f"{sharpe:.2f}",
+        f"{metricas['sharpe']:.2f}",
     )

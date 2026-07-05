@@ -51,11 +51,26 @@ def estilos_signo(columnas):
 
 
 def formatear_resultado_con_rentabilidad(importe, rentabilidad, simbolo):
-    color, signo = (VERDE, "+") if rentabilidad >= 0 else (ROJO, "")
+    if importe > 0:
+        color = VERDE
+        signo_importe = "+"
+        signo_rentabilidad = "+"
+    elif importe < 0:
+        color = ROJO
+        signo_importe = "-"
+        signo_rentabilidad = ""
+    else:
+        color = "#111827"
+        signo_importe = ""
+        signo_rentabilidad = ""
+
     return [
-        f"{simbolo}{importe:,.2f} ",
         html.Span(
-            f"({signo}{rentabilidad * 100:.2f}%)",
+            f"{signo_importe}{simbolo}{abs(importe):,.2f}",
+            style={"color": color},
+        ),
+        html.Span(
+            f" ({signo_rentabilidad}{rentabilidad * 100:.2f}%)",
             style={
                 "color": color,
                 "fontSize": "20px",

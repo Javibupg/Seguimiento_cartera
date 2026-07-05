@@ -17,6 +17,7 @@ from cartera_utils import (
 
 RF_ANUAL, RF_FECHA = obtener_rf_anual_eur()
 TOOLTIP_TWR = "Rentabilidad TWR no anualizada. Ajusta las aportaciones y retiradas para que meter dinero nuevo no baje ni suba artificialmente la rentabilidad."
+TOOLTIP_RESULTADO = "Ganancia o perdida ajustada por aportaciones y retiradas. El porcentaje se calcula sobre el capital expuesto del periodo para que importe y porcentaje sean comparables."
 
 PERIODOS = {
     "1w": {"label": "1S", "nombre": "1 semana", "offset": pd.DateOffset(weeks=1)},
@@ -128,15 +129,71 @@ def preparar_datos_usd(periodo):
 
 def calcular_metricas_periodo(valor, capital, flujos, twr, periodo):
     if valor.empty:
-        return 0, 0, 0, 0, 0, 0
+        return {
+            "referencia": 0,
+            "valor_final": 0,
+            "flujos_netos": 0,
+            "resultado": 0,
+            "rentabilidad_resultado": 0,
+            "twr": 0,
+            "vol": 0,
+            "sharpe": 0,
+        }
 
-    primera = capital.iloc[-1] if periodo == "max" else valor.iloc[0]
-    resultado = valor.iloc[-1] - capital.iloc[-1] if periodo == "max" else valor.iloc[-1] - valor.iloc[0] - flujos.iloc[1:].sum()
+    valor_final = valor.iloc[-1]
+
+    if periodo == "max":
+        referencia = capital.iloc[-1]
+        flujos_netos = flujos.sum()
+        resultado = valor_final - referencia
+        base_resultado = referencia
+    else:
+        referencia = valor.iloc[0]
+        flujos_netos = flujos.iloc[1:].sum() if len(flujos) > 1 else 0
+        resultado = valor_final - referencia - flujos_netos
+        base_resultado = calcular_capital_expuesto_periodo(valor, flujos)
+
+    rentabilidad_resultado = resultado / base_resultado if abs(base_resultado) > 1e-12 else 0
     vol, sharpe = calcular_vol_sharpe(valor, flujos, ventana=None, rf_anual=RF_ANUAL)
-    return primera, valor.iloc[-1], resultado, twr.iloc[-1], vol, sharpe
+    return {
+        "referencia": referencia,
+        "valor_final": valor_final,
+        "flujos_netos": flujos_netos,
+        "resultado": resultado,
+        "rentabilidad_resultado": rentabilidad_resultado,
+        "twr": twr.iloc[-1],
+        "vol": vol,
+        "sharpe": sharpe,
+    }
 
 
-def formatear_importe(valor, simbolo):
+def calcular_capital_expuesto_periodo(valor, flujos):
+    if valor.empty:
+        return 0
+
+    inicio = valor.index[0]
+    fin = valor.index[-1]
+    capital_expuesto = float(valor.iloc[0])
+    duracion = (fin - inicio).total_seconds()
+
+    if duracion <= 0:
+        return capital_expuesto
+
+    flujos_periodo = flujos.reindex(valor.index).fillna(0).iloc[1:]
+    for fecha, flujo in flujos_periodo.items():
+        if flujo == 0:
+            continue
+        peso = (fin - fecha).total_seconds() / duracion
+        peso = min(max(peso, 0), 1)
+        capital_expuesto += float(flujo) * peso
+
+    return capital_expuesto
+
+
+def formatear_importe(valor, simbolo, con_signo=False):
+    if con_signo:
+        signo = "+" if valor > 0 else "-" if valor < 0 else ""
+        return f"{signo}{simbolo}{abs(valor):,.2f}"
     return f"{simbolo}{valor:,.2f}"
 
 
@@ -145,8 +202,8 @@ def titulo_primera_tarjeta(divisa, periodo):
 
 
 def titulo_resultado(divisa, periodo):
-    texto = f"Resultado {divisa}" if periodo == "max" else f"Resultado {divisa} · {PERIODOS[periodo]['label']}"
-    return titulo_tarjeta(texto, TOOLTIP_TWR)
+    texto = f"Resultado {divisa}" if periodo == "max" else f"Resultado {divisa} - {PERIODOS[periodo]['label']}"
+    return titulo_tarjeta(texto, TOOLTIP_RESULTADO)
 
 
 def titulo_sharpe(divisa):
