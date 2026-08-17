@@ -1,12 +1,15 @@
-from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
 import yfinance as yf
 
+from yahoo_session import obtener_sesion_yahoo
+
 
 CACHE_DIR = Path(".cache/precios")
 VENTANA_SOLAPE = pd.Timedelta(days=7)
+INTERVALO_REINTENTO_DESCARGA = pd.Timedelta(minutes=1)
+ULTIMA_DESCARGA_POR_TICKER = {}
 
 
 def _archivo(ticker):
@@ -47,12 +50,26 @@ def _fecha_inicio(start=None, period=None):
 
 def _ultimo_dia_objetivo():
     hoy = pd.Timestamp.today().normalize()
-    return hoy if hoy.weekday() < 5 else hoy - pd.offsets.BDay(1)
+    # La cotizacion de la sesion en curso no es un cierre disponible todavia.
+    return hoy - pd.offsets.BDay(1)
 
 
 def _descargar(ticker, start):
+    ahora = pd.Timestamp.now()
+    ultima_descarga = ULTIMA_DESCARGA_POR_TICKER.get(ticker)
+    if ultima_descarga is not None and ahora - ultima_descarga < INTERVALO_REINTENTO_DESCARGA:
+        return pd.Series(dtype="float64", name=ticker)
+
+    ULTIMA_DESCARGA_POR_TICKER[ticker] = ahora
     try:
-        datos = yf.download(ticker, start=start, auto_adjust=True, progress=False, threads=False)
+        datos = yf.download(
+            ticker,
+            start=start,
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+            session=obtener_sesion_yahoo(),
+        )
     except Exception:
         return pd.Series(dtype="float64", name=ticker)
     if datos.empty:
@@ -73,13 +90,13 @@ def _descargar(ticker, start):
     return close.dropna().astype(float)
 
 
-@lru_cache(maxsize=64)
 def cargar_cierres(ticker, start=None, period=None):
     inicio = _fecha_inicio(start, period)
     cache = _leer(ticker)
 
     if cache.empty or cache.index.min() > inicio:
         nuevo = _descargar(ticker, inicio)
+    # Recupera cualquier cierre ya finalizado que todavía no esté en caché.
     elif cache.index.max().normalize() < _ultimo_dia_objetivo():
         nuevo = _descargar(ticker, max(inicio, cache.index.max() - VENTANA_SOLAPE))
     else:

@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from yahoo_session import obtener_sesion_yahoo
+
 from cache_precios import cargar_cierres_varios
 
 EXCEL_PATH = Path("Libro_inversiones.xlsx")
@@ -502,19 +504,81 @@ def calcular_desempeno_cartera(df, cash, divisa="EUR"):
     return datos[f"TWR_{divisa.upper()}"]
 
 
-def calcular_vol_sharpe(valor_cartera, flujos, ventana=None, rf_anual=0.0):
+def calcular_rentabilidad_anualizada_por_activo(df, cash, fecha_inicio_periodo, divisa="EUR"):
+    """Calcula la rentabilidad anualizada del precio de cada posicion abierta."""
+    columnas = ["Activo", "Nombre", "Valor_actual", "Rentabilidad_anualizada"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=columnas)
+
+    divisa = divisa.upper()
+    if divisa not in MONEDAS_SOPORTADAS:
+        raise ValueError(f"Divisa no soportada: {divisa}")
+
+    distribucion, _, _ = calcular_distribucion_actual_multidivisa(df, cash)
+    if distribucion.empty:
+        return pd.DataFrame(columns=columnas)
+
+    tickers = distribucion["Activo"].tolist()
+    fecha_inicio = pd.to_datetime(fecha_inicio_periodo).normalize()
+    precios = descargar_precios(tickers, fecha_inicio).reindex(columns=tickers).ffill().bfill()
+    if precios.empty:
+        return pd.DataFrame(columns=columnas)
+
+    fx_usdeur = descargar_fx_usdeur(fecha_inicio, precios.index).ffill().bfill()
+    divisas_activos = df.groupby("Activo")["Currency"].last().reindex(tickers)
+    factores = pd.DataFrame(
+        {
+            ticker: (
+                fx_usdeur
+                if divisas_activos[ticker] == "USD" and divisa == "EUR"
+                else 1 / fx_usdeur
+                if divisas_activos[ticker] == "EUR" and divisa == "USD"
+                else 1.0
+            )
+            for ticker in tickers
+        },
+        index=precios.index,
+    )
+
+    dias = max((precios.index[-1] - precios.index[0]).days, 1)
+    rentabilidades = ((precios * factores).iloc[-1] / (precios * factores).iloc[0]) ** (365 / dias) - 1
+    resultado = distribucion[["Activo", f"Valor_{divisa}"]].rename(
+        columns={f"Valor_{divisa}": "Valor_actual"}
+    )
+    resultado["Nombre"] = resultado["Activo"].map(cargar_listado_activos()).fillna(resultado["Activo"])
+    resultado["Rentabilidad_anualizada"] = resultado["Activo"].map(rentabilidades)
+    return resultado.sort_values("Valor_actual", ascending=False).reset_index(drop=True)
+
+
+def calcular_vol_sharpe(
+    valor_cartera,
+    flujos,
+    ventana=None,
+    rf_anual=0.0,
+    min_observaciones_volatilidad=1,
+    min_observaciones_sharpe=1,
+    devolver_observaciones=False,
+):
     rent = calcular_rentabilidades_diarias_ajustadas(valor_cartera, flujos).iloc[1:].dropna()
 
     if ventana is not None:
         rent = rent.tail(ventana)
 
-    if rent.empty or rent.std() == 0:
-        return 0, 0
+    observaciones = len(rent)
+    volatilidad = None
+    sharpe = None
 
-    rf_diario = (1 + rf_anual) ** (1 / 252) - 1
-    vol = rent.std() * 252 ** 0.5
-    sharpe = ((rent.mean() - rf_diario) / rent.std()) * 252 ** 0.5
-    return vol, sharpe
+    if observaciones >= min_observaciones_volatilidad:
+        desviacion = rent.std()
+        volatilidad = 0.0 if desviacion == 0 else desviacion * 252 ** 0.5
+
+        if observaciones >= min_observaciones_sharpe and desviacion > 0:
+            rf_diario = (1 + rf_anual) ** (1 / 252) - 1
+            sharpe = ((rent.mean() - rf_diario) / desviacion) * 252 ** 0.5
+
+    if devolver_observaciones:
+        return volatilidad, sharpe, observaciones
+    return volatilidad, sharpe
 
 
 def calcular_distribucion_actual_multidivisa(df, cash):
@@ -573,11 +637,87 @@ def calcular_distribucion_actual_multidivisa(df, cash):
     return distribucion, valor_total_eur, valor_total_usd
 
 
-def calcular_operaciones_abiertas(df, cash):
+def calcular_operaciones_abiertas(df, cash, fecha_inicio_periodo=None):
     distribucion, _, _ = calcular_distribucion_actual_multidivisa(df, cash)
 
     if distribucion.empty:
         return pd.DataFrame()
+
+    if fecha_inicio_periodo is not None:
+        fecha_inicio_periodo = pd.to_datetime(fecha_inicio_periodo).normalize()
+        tickers = distribucion["Activo"].tolist()
+        precios = descargar_precios(tickers, fecha_inicio_periodo)
+
+        if precios.empty:
+            return pd.DataFrame()
+
+        fx_usdeur = descargar_fx_usdeur(fecha_inicio_periodo, precios.index)
+        fx_inicio = float(fx_usdeur.ffill().bfill().iloc[0])
+        precios_inicio = precios.ffill().bfill().iloc[0].reindex(tickers)
+        divisas = df.groupby("Activo")["Currency"].last().reindex(tickers)
+
+        posiciones_inicio = (
+            df[df["Fecha"] < fecha_inicio_periodo]
+            .groupby("Activo")["acciones_firmadas"]
+            .sum()
+            .reindex(tickers)
+            .fillna(0.0)
+        )
+        factores_inicio = divisas.map({"EUR": 1.0, "USD": fx_inicio}).fillna(1.0)
+        valor_inicio = posiciones_inicio * precios_inicio * factores_inicio
+
+        ops_periodo = df[df["Fecha"] >= fecha_inicio_periodo].copy()
+        if ops_periodo.empty:
+            compras_periodo = pd.Series(0.0, index=tickers)
+            ventas_periodo = pd.Series(0.0, index=tickers)
+        else:
+            ops_periodo["Importe_EUR_calc"] = _importes_operaciones_eur(ops_periodo, precios.index, fx_usdeur)
+            compras_periodo = (
+                ops_periodo[ops_periodo["Orden"].eq("compra")]
+                .groupby("Activo")["Importe_EUR_calc"]
+                .sum()
+                .reindex(tickers)
+                .fillna(0.0)
+            )
+            ventas_periodo = (
+                ops_periodo[ops_periodo["Orden"].eq("venta")]
+                .groupby("Activo")["Importe_EUR_calc"]
+                .sum()
+                .reindex(tickers)
+                .fillna(0.0)
+            )
+
+        nombres = cargar_listado_activos()
+        abiertas = distribucion.copy()
+        abiertas["Nombre"] = abiertas["Activo"].map(nombres).fillna(abiertas["Activo"])
+        abiertas["Periodo"] = fecha_inicio_periodo.strftime("%d/%m/%y") + "-Actual"
+        abiertas["Precio_pagado_EUR"] = (
+            valor_inicio.reindex(abiertas["Activo"]).values
+            + compras_periodo.reindex(abiertas["Activo"]).values
+        )
+        abiertas["Resultado"] = (
+            ventas_periodo.reindex(abiertas["Activo"]).values
+            + abiertas["Valor_EUR"]
+            - abiertas["Precio_pagado_EUR"]
+        )
+        abiertas["Rentabilidad"] = abiertas["Resultado"] / abiertas["Precio_pagado_EUR"].replace(0, pd.NA)
+        abiertas["Rentabilidad"] = abiertas["Rentabilidad"].fillna(0.0)
+        dias = max((pd.Timestamp.today().normalize() - fecha_inicio_periodo).days, 1)
+        abiertas["Rent. anualizada"] = _sin_inf((1 + abiertas["Rentabilidad"]) ** (365 / dias) - 1)
+
+        return abiertas[
+            [
+                "Activo",
+                "Nombre",
+                "Periodo",
+                "Acciones",
+                "Precio_pagado_EUR",
+                "Valor_EUR",
+                "Resultado",
+                "Rentabilidad",
+                "Rent. anualizada",
+            ]
+        ].sort_values("Resultado", ascending=False).reset_index(drop=True)
 
     fechas_inicio = df[df["Orden"] == "compra"].groupby("Activo")["Fecha"].min()
     nombres = cargar_listado_activos()
@@ -936,94 +1076,138 @@ def calcular_optimizacion_montecarlo_sharpe(
     }
 
 
-def calcular_inversiones_por_banco(df, cash):
-    """
-    Resume la inversión por banco en EUR.
+def _posiciones_banco_hasta(ops, fecha_corte=None):
+    if fecha_corte is not None:
+        ops = ops[ops["Fecha"] < fecha_corte]
 
-    - Capital invertido: suma histórica de compras.
-    - Capital sujeto a riesgo: valor actual de las posiciones abiertas.
-    - Resultado: ventas realizadas + valor actual abierto - compras históricas.
-    """
-    df = _normalizar_banco(df)
-
-    if df.empty:
-        return pd.DataFrame()
-
-    tickers = sorted(df["Activo"].dropna().unique())
-    if not tickers:
-        return pd.DataFrame()
-
-    if cash is not None and not cash.empty:
-        fecha_inicio = min(df["Fecha"].min(), cash["Fecha"].min())
-    else:
-        fecha_inicio = df["Fecha"].min()
-
-    precios = descargar_precios(tickers, fecha_inicio)
-    if precios.empty:
-        return pd.DataFrame()
-
-    fx_usdeur = descargar_fx_usdeur(fecha_inicio, precios.index)
-    fx_actual = float(fx_usdeur.dropna().iloc[-1])
-
-    ops = df.copy()
-    ops["Importe_EUR_calc"] = _importes_operaciones_eur(ops, precios.index, fx_usdeur)
-
-    resumen_ops = (
-        ops.pivot_table(
-            index="Banco",
-            columns="Orden",
-            values="Importe_EUR_calc",
-            aggfunc="sum",
-            fill_value=0.0,
-        )
-        .rename(columns={"compra": "Capital_invertido_EUR", "venta": "Capital_recuperado_EUR"})
-    )
-
-    for col in ["Capital_invertido_EUR", "Capital_recuperado_EUR"]:
-        if col not in resumen_ops.columns:
-            resumen_ops[col] = 0.0
+    if ops.empty:
+        return pd.DataFrame(columns=["Banco", "Activo", "acciones_firmadas"])
 
     posiciones = (
         ops.groupby(["Banco", "Activo"])["acciones_firmadas"]
         .sum()
         .reset_index()
     )
-    posiciones = posiciones[posiciones["acciones_firmadas"].abs() > 1e-12].copy()
+    return posiciones[posiciones["acciones_firmadas"].abs() > 1e-12].copy()
 
+
+def _valorar_posiciones_banco(posiciones, precios_ref, fx_ref, divisas):
     if posiciones.empty:
-        valor_abierto = pd.Series(0.0, index=resumen_ops.index, name="Capital_sujeto_riesgo_EUR")
-    else:
-        ultimos_precios = precios.ffill().iloc[-1]
-        divisas = ops.groupby("Activo")["Currency"].last()
+        return pd.Series(dtype="float64", name="Capital_sujeto_riesgo_EUR")
 
-        posiciones["Precio_actual"] = posiciones["Activo"].map(ultimos_precios)
-        posiciones["Divisa"] = posiciones["Activo"].map(divisas)
-        posiciones["Tipo_cambio_EUR"] = posiciones["Divisa"].map({"EUR": 1.0, "USD": fx_actual})
-        posiciones["Valor_EUR"] = (
-            posiciones["acciones_firmadas"]
-            * posiciones["Precio_actual"]
-            * posiciones["Tipo_cambio_EUR"]
-        )
-        valor_abierto = posiciones.groupby("Banco")["Valor_EUR"].sum().rename("Capital_sujeto_riesgo_EUR")
-
-    resumen = resumen_ops.join(valor_abierto, how="left").fillna(0.0).reset_index()
-    resumen["Resultado_EUR"] = (
-        resumen["Capital_recuperado_EUR"]
-        + resumen["Capital_sujeto_riesgo_EUR"]
-        - resumen["Capital_invertido_EUR"]
+    posiciones = posiciones.copy()
+    posiciones["Precio"] = posiciones["Activo"].map(precios_ref)
+    posiciones["Divisa"] = posiciones["Activo"].map(divisas)
+    posiciones["Tipo_cambio_EUR"] = posiciones["Divisa"].map({"EUR": 1.0, "USD": fx_ref})
+    posiciones["Valor_EUR"] = (
+        posiciones["acciones_firmadas"]
+        * posiciones["Precio"]
+        * posiciones["Tipo_cambio_EUR"]
     )
-    resumen["Rentabilidad"] = resumen["Resultado_EUR"] / resumen["Capital_invertido_EUR"].replace(0, pd.NA)
-    resumen["Rentabilidad"] = resumen["Rentabilidad"].fillna(0.0)
+    return posiciones.groupby("Banco")["Valor_EUR"].sum().rename("Capital_sujeto_riesgo_EUR")
+
+
+def _twr_periodo_desde_serie(series, fecha_inicio_periodo=None, divisa="EUR"):
+    columna_twr = f"TWR_{divisa.upper()}"
+    if series.empty or columna_twr not in series:
+        return 0.0
+
+    twr = series[columna_twr].dropna()
+    if twr.empty:
+        return 0.0
+
+    if fecha_inicio_periodo is not None:
+        twr_periodo = twr.loc[twr.index >= fecha_inicio_periodo]
+        twr = twr_periodo if not twr_periodo.empty else twr.tail(1)
+
+    return float((1 + twr.iloc[-1]) / (1 + twr.iloc[0]) - 1)
+
+
+def calcular_twr_por_banco(df, cash, fecha_inicio_periodo=None, divisa="EUR"):
+    """Calcula TWR por banco y para el total en la divisa indicada."""
+    ops = _normalizar_banco(df)
+    movimientos_cash = _normalizar_banco(cash) if cash is not None else pd.DataFrame()
+
+    if ops.empty:
+        return pd.Series(dtype="float64", name="TWR")
+
+    fecha_inicio_periodo = (
+        pd.to_datetime(fecha_inicio_periodo).normalize()
+        if fecha_inicio_periodo is not None
+        else None
+    )
+    bancos = sorted(
+        set(ops["Banco"].dropna())
+        | set(movimientos_cash.get("Banco", pd.Series(dtype=str)).dropna())
+    )
+    resultados = {}
+
+    for banco in bancos:
+        ops_banco = ops[ops["Banco"].eq(banco)]
+        cash_banco = movimientos_cash[movimientos_cash["Banco"].eq(banco)]
+        serie_banco = calcular_series_cartera_multidivisa(ops_banco, cash_banco)
+        resultados[banco] = _twr_periodo_desde_serie(serie_banco, fecha_inicio_periodo, divisa)
+
+    serie_total = calcular_series_cartera_multidivisa(ops, movimientos_cash)
+    resultados["TOTAL"] = _twr_periodo_desde_serie(serie_total, fecha_inicio_periodo, divisa)
+    return pd.Series(resultados, name="TWR", dtype="float64")
+
+
+def calcular_inversiones_por_banco(df, cash, fecha_inicio_periodo=None, divisa_twr="EUR"):
+    """
+    Resume capital aportado, valor actual y TWR por banco en EUR.
+    """
+    df = _normalizar_banco(df)
+    movimientos_cash = _normalizar_banco(cash) if cash is not None else pd.DataFrame()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    fecha_inicio_periodo = (
+        pd.to_datetime(fecha_inicio_periodo).normalize()
+        if fecha_inicio_periodo is not None
+        else None
+    )
+
+    ops = df.copy()
+    bancos = sorted(
+        set(ops["Banco"].dropna())
+        | set(movimientos_cash.get("Banco", pd.Series(dtype=str)).dropna())
+    )
+    resumen = pd.DataFrame(index=bancos)
+
+    if movimientos_cash.empty:
+        capital_aportado = pd.Series(dtype="float64")
+    else:
+        es_externo = movimientos_cash["Es_flujo_externo"]
+        flujos_externos = movimientos_cash[es_externo].copy()
+        capital_aportado = flujos_externos.groupby("Banco")["Importe_firmado_EUR"].sum()
+
+    resumen["Capital_invertido_EUR"] = capital_aportado.reindex(bancos).fillna(0.0)
+
+    valores_actuales = {}
+    for banco in bancos:
+        serie_banco = calcular_series_cartera_multidivisa(
+            ops[ops["Banco"].eq(banco)],
+            movimientos_cash[movimientos_cash["Banco"].eq(banco)],
+        )
+        valores_actuales[banco] = (
+            float(serie_banco["Valor_cartera_EUR"].iloc[-1])
+            if not serie_banco.empty
+            else 0.0
+        )
+    resumen["Capital_sujeto_riesgo_EUR"] = pd.Series(valores_actuales).reindex(bancos).fillna(0.0)
+
+    twr_por_banco = calcular_twr_por_banco(ops, movimientos_cash, fecha_inicio_periodo, divisa_twr)
+    resumen["TWR"] = twr_por_banco.reindex(resumen.index).fillna(0.0)
+    resumen = resumen.reset_index(names="Banco")
 
     total = pd.DataFrame({
         "Banco": ["TOTAL"],
         "Capital_invertido_EUR": [resumen["Capital_invertido_EUR"].sum()],
-        "Capital_recuperado_EUR": [resumen["Capital_recuperado_EUR"].sum()],
         "Capital_sujeto_riesgo_EUR": [resumen["Capital_sujeto_riesgo_EUR"].sum()],
-        "Resultado_EUR": [resumen["Resultado_EUR"].sum()],
     })
-    total["Rentabilidad"] = total["Resultado_EUR"] / total["Capital_invertido_EUR"].replace(0, pd.NA)
-    total["Rentabilidad"] = total["Rentabilidad"].fillna(0.0)
+    total["TWR"] = twr_por_banco.get("TOTAL", 0.0)
 
     resumen = resumen.sort_values("Capital_sujeto_riesgo_EUR", ascending=False)
     return pd.concat([resumen, total], ignore_index=True)[
@@ -1031,8 +1215,7 @@ def calcular_inversiones_por_banco(df, cash):
             "Banco",
             "Capital_invertido_EUR",
             "Capital_sujeto_riesgo_EUR",
-            "Resultado_EUR",
-            "Rentabilidad",
+            "TWR",
         ]
     ]
 
@@ -1048,7 +1231,7 @@ def calcular_proximos_dividendos(df):
 
     for ticker, acciones in posiciones.items():
         try:
-            ticker_yahoo = yf.Ticker(ticker)
+            ticker_yahoo = yf.Ticker(ticker, session=obtener_sesion_yahoo())
             info = ticker_yahoo.get_info() if hasattr(ticker_yahoo, "get_info") else ticker_yahoo.info
         except Exception:
             ticker_yahoo = None
@@ -1179,7 +1362,17 @@ def calcular_operaciones_cerradas(df):
     nombres = cargar_listado_activos()
     operaciones["Nombre"] = operaciones["Activo"].map(nombres).fillna(operaciones["Activo"])
 
-    return operaciones[["Activo", "Nombre", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital_invertido"]]
+    return operaciones[
+        [
+            "Activo",
+            "Nombre",
+            "Periodo",
+            "Fecha_fin",
+            "Rentabilidad",
+            "Rent. anualizada",
+            "Capital_invertido",
+        ]
+    ]
 
 
 def obtener_rf_anual_eur(fallback=0.02):

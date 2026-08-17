@@ -260,6 +260,58 @@ def crear_grafico_drawdown(
     return fig
 
 
+def crear_mapa_calor_activos(activos, simbolo, titulo):
+    if activos.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No hay posiciones abiertas para mostrar.",
+            showarrow=False,
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            font={"size": 16, "color": "#6b7280"},
+        )
+        return fig.update_layout(template="plotly_white", title=titulo, height=440)
+
+    limite = max(float(activos["Rentabilidad_anualizada"].abs().max()), 0.02)
+    fig = go.Figure(
+        go.Treemap(
+            labels=activos["Nombre"],
+            parents=[""] * len(activos),
+            values=activos["Valor_actual"],
+            customdata=activos[["Activo", "Valor_actual", "Rentabilidad_anualizada"]].to_numpy(),
+            marker={
+                "colors": activos["Rentabilidad_anualizada"],
+                "colorscale": [
+                    [0.0, "#b91c1c"],
+                    [0.45, "#f87171"],
+                    [0.5, "#64748b"],
+                    [0.55, "#86efac"],
+                    [1.0, "#15803d"],
+                ],
+                "cmin": -limite,
+                "cmid": 0,
+                "cmax": limite,
+                "colorbar": {"title": "Rent. anual.", "tickformat": ".0%"},
+            },
+            texttemplate="<b>%{label}</b><br>%{customdata[2]:+.2%}",
+            hovertemplate=(
+                "<b>%{label}</b><br>%{customdata[0]}<br>"
+                f"Valor actual: {simbolo}%{{customdata[1]:,.2f}}<br>"
+                "Rentabilidad anualizada: %{customdata[2]:+.2%}<extra></extra>"
+            ),
+            branchvalues="total",
+        )
+    )
+    return fig.update_layout(
+        template="plotly_white",
+        title={"text": titulo, "x": 0.02, "xanchor": "left"},
+        height=440,
+        margin={"l": 8, "r": 80, "t": 52, "b": 8},
+    )
+
+
 def crear_grafico_desglose_eur(datos):
     if datos.empty:
         fig = go.Figure()
@@ -314,26 +366,43 @@ def crear_grafico_drawdown_eur(datos):
     )
 
 
-def crear_tabla_operaciones_cerradas(df):
+def crear_tabla_operaciones_cerradas(df, mostrar_rentabilidad=True):
     if df.empty:
         return html.Div("Todavía no hay operaciones cerradas.", style=ESTILO_TEXTO_MUTED)
     tabla = df.copy()
     tabla["Capital_invertido"] = tabla["Capital_invertido"].map(formato_eur)
-    for col in ["Rentabilidad", "Rent. anualizada"]:
-        tabla[col] = tabla[col].map(lambda x: formato_porcentaje(x, con_signo=True))
     tabla = tabla.rename(columns={"Capital_invertido": "Capital invertido EUR"})
-    columnas = ["Nombre", "Periodo", "Rentabilidad", "Rent. anualizada", "Capital invertido EUR"]
+    columnas = ["Nombre", "Periodo", "Capital invertido EUR"]
+    columnas_signo = []
+
+    if mostrar_rentabilidad:
+        for col in ["Rentabilidad", "Rent. anualizada"]:
+            tabla[col] = tabla[col].map(lambda x: formato_porcentaje(x, con_signo=True))
+        tabla = tabla.rename(
+            columns={
+                "Rentabilidad": "Rentabilidad realizada",
+                "Rent. anualizada": "Rentabilidad anualizada",
+            }
+        )
+        columnas_signo = ["Rentabilidad realizada", "Rentabilidad anualizada"]
+        columnas = ["Nombre", "Periodo", *columnas_signo, "Capital invertido EUR"]
 
     return crear_data_table(
         tabla,
         columnas,
         style_table={"height": "300px", "overflowY": "auto", "overflowX": "auto"},
         min_width="120px",
-        style_data_conditional=estilos_signo(["Rentabilidad", "Rent. anualizada"]),
+        style_data_conditional=estilos_signo(columnas_signo),
     )
 
 
-def crear_tabla_operaciones_abiertas(df):
+def crear_tabla_operaciones_abiertas(
+    df,
+    etiqueta_capital="Capital invertido EUR",
+    etiqueta_resultado="Resultado no realizado EUR",
+    etiqueta_rentabilidad="Rentabilidad no realizada",
+    mostrar_rentabilidad=True,
+):
     if df.empty:
         return html.Div("No hay operaciones abiertas.", style=ESTILO_TEXTO_MUTED)
 
@@ -341,16 +410,17 @@ def crear_tabla_operaciones_abiertas(df):
     tabla["Acciones"] = tabla["Acciones"].map(lambda x: f"{x:,.4f}")
     for col in ["Precio_pagado_EUR", "Valor_EUR"]:
         tabla[col] = tabla[col].map(formato_eur)
-    tabla["Resultado"] = tabla["Resultado"].map(lambda x: formato_eur(x, con_signo=True))
-    tabla["Rentabilidad"] = tabla["Rentabilidad"].map(lambda x: formato_porcentaje(x, con_signo=True))
-    tabla["Rent. anualizada"] = tabla["Rent. anualizada"].map(lambda x: formato_porcentaje(x, con_signo=True))
+    if mostrar_rentabilidad:
+        tabla["Resultado"] = tabla["Resultado"].map(lambda x: formato_eur(x, con_signo=True))
+        tabla["Rentabilidad"] = tabla["Rentabilidad"].map(lambda x: formato_porcentaje(x, con_signo=True))
+        tabla["Rent. anualizada"] = tabla["Rent. anualizada"].map(lambda x: formato_porcentaje(x, con_signo=True))
 
     tabla = tabla.rename(
         columns={
-            "Precio_pagado_EUR": "Capital invertido EUR",
+            "Precio_pagado_EUR": etiqueta_capital,
             "Valor_EUR": "Valor actual EUR",
-            "Resultado": "Resultado no realizado EUR",
-            "Rentabilidad": "Rentabilidad no realizada",
+            "Resultado": etiqueta_resultado,
+            "Rentabilidad": etiqueta_rentabilidad,
             "Rent. anualizada": "Rentabilidad anualizada",
         }
     )
@@ -358,23 +428,31 @@ def crear_tabla_operaciones_abiertas(df):
         "Nombre",
         "Periodo",
         "Acciones",
-        "Capital invertido EUR",
+        etiqueta_capital,
         "Valor actual EUR",
-        "Resultado no realizado EUR",
-        "Rentabilidad no realizada",
-        "Rentabilidad anualizada",
     ]
+
+    if mostrar_rentabilidad:
+        columnas.extend([
+            etiqueta_resultado,
+            etiqueta_rentabilidad,
+            "Rentabilidad anualizada",
+        ])
 
     return crear_data_table(
         tabla,
         columnas,
         style_table={"height": "300px", "overflowY": "auto", "overflowX": "auto"},
         min_width="120px",
-        style_data_conditional=estilos_signo([
-            "Resultado no realizado EUR",
-            "Rentabilidad no realizada",
-            "Rentabilidad anualizada",
-        ]),
+        style_data_conditional=(
+            estilos_signo([
+                etiqueta_resultado,
+                etiqueta_rentabilidad,
+                "Rentabilidad anualizada",
+            ])
+            if mostrar_rentabilidad
+            else []
+        ),
     )
 
 
@@ -399,7 +477,12 @@ def crear_data_table(
     )
 
 
-def crear_tabla_inversiones_por_banco(df):
+def crear_tabla_inversiones_por_banco(
+    df,
+    etiqueta_capital="Capital total invertido EUR",
+    etiqueta_valor="Valor actual EUR",
+    etiqueta_twr="TWR",
+):
     if df.empty:
         return html.Div(
             "No hay datos suficientes para mostrar el resumen por banco.",
@@ -409,25 +492,22 @@ def crear_tabla_inversiones_por_banco(df):
     tabla = df.copy()
     for col in ["Capital_invertido_EUR", "Capital_sujeto_riesgo_EUR"]:
         tabla[col] = tabla[col].map(formato_eur)
-    tabla["Resultado_EUR"] = tabla["Resultado_EUR"].map(lambda x: formato_eur(x, con_signo=True))
-    tabla["Rentabilidad"] = tabla["Rentabilidad"].map(lambda x: formato_porcentaje(x, con_signo=True))
+    tabla["TWR"] = tabla["TWR"].map(lambda x: formato_porcentaje(x, con_signo=True))
 
     tabla = tabla.rename(
         columns={
             "Banco": "Banco",
-            "Capital_invertido_EUR": "Dinero invertido EUR",
-            "Capital_sujeto_riesgo_EUR": "Capital sujeto a riesgo EUR",
-            "Resultado_EUR": "Subida / bajada EUR",
-            "Rentabilidad": "Subida / bajada %",
+            "Capital_invertido_EUR": etiqueta_capital,
+            "Capital_sujeto_riesgo_EUR": etiqueta_valor,
+            "TWR": etiqueta_twr,
         }
     )
 
     columnas = [
         "Banco",
-        "Dinero invertido EUR",
-        "Capital sujeto a riesgo EUR",
-        "Subida / bajada EUR",
-        "Subida / bajada %",
+        etiqueta_capital,
+        etiqueta_valor,
+        etiqueta_twr,
     ]
 
     return crear_data_table(
@@ -440,7 +520,7 @@ def crear_tabla_inversiones_por_banco(df):
                 "fontWeight": "700",
                 "backgroundColor": "#f9fafb",
             },
-            *estilos_signo(["Subida / bajada EUR", "Subida / bajada %"]),
+            *estilos_signo([etiqueta_twr]),
         ],
     )
 

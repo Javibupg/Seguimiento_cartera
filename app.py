@@ -53,9 +53,11 @@ def menu_paginas():
 
 
 app.layout = html.Div(
+    className="dashboard-shell",
     style=ESTILO_FONDO,
     children=[
         html.Div(
+            className="dashboard-main",
             style={"maxWidth": "1100px", "margin": "0 auto"},
             children=[
                 html.H1(
@@ -79,7 +81,7 @@ app.layout = html.Div(
                                 "marginBottom": "12px",
                             },
                         ),
-                        html.Div(menu_paginas()),
+                        html.Div(menu_paginas(), className="dashboard-nav"),
                     ],
                 ),
 
@@ -93,4 +95,4 @@ app.layout = html.Div(
 if __name__ == "__main__":
     port = 8050
     Timer(1, lambda: webbrowser.open_new(f"http://127.0.0.1:{port}")).start()
-    app.run(debug=True, port=port, use_reloader=False)
+    app.run(debug=False, port=port, use_reloader=False)
